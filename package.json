@@ -1,5 +1,5 @@
 {
-  "name": "nanoclaw",
+  "name": "@rozek/nanoclaw",
   "version": "1.2.17",
   "description": "Personal Claude assistant. Lightweight, secure, customizable.",
   "type": "module",

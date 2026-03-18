@@ -17,7 +17,7 @@
 
 > **Important:** this is my own fork of the original [qwibitai/nanoclaw](https://github.com/qwibitai/nanoclaw).
 > 
-> It adds a **built-in web channel** (multi-session browser UI with Markdown Support + HTTP server) and a CLI entry point that lets you start NanoClaw with a single `npx nanoclaw` command — no cloning or manual setup required. See [NanoClaw_with_Web-Support.md](NanoClaw_with_Web-Support.md) for the full installation guide.
+> It adds a **built-in web channel** (multi-session browser UI with Markdown Support + HTTP server) and a CLI entry point that lets you start NanoClaw with a single `npx @rozek/nanoclaw` command — no cloning or manual setup required. See [NanoClaw_with_Web-Support.md](NanoClaw_with_Web-Support.md) for the full installation guide.
 
 ---
 
@@ -51,14 +51,14 @@ NanoClaw provides that same core functionality, but in a codebase small enough t
 ### With npx (this fork — recommended)
 
 ```bash
-npx nanoclaw
+npx @rozek/nanoclaw
 ```
 
 Then open **http://localhost:3099** in your browser. That's it.
 
 ```bash
 # Custom port, workspace, and token protection:
-npx nanoclaw --port 8080 --workspace ~/my-workspace --token mySecretToken
+npx @rozek/nanoclaw --port 8080 --workspace ~/my-workspace --token mySecretToken
 ```
 
 See [NanoClaw_with_Web-Support.md](NanoClaw_with_Web-Support.md) for all options and prerequisites.
@@ -106,7 +106,7 @@ Then run `/setup`. Claude Code handles everything: dependencies, authentication,
 
 ## What It Supports
 
-- **Built-in web channel** — Start with `npx nanoclaw` and open your browser. No messaging app required. Full-featured chat UI with Markdown, math (KaTeX), syntax highlighting, and Mermaid diagrams. Multi-session, persistent, accessible from the LAN. *(Added in this fork — see [NanoClaw_with_Web-Support.md](NanoClaw_with_Web-Support.md))*
+- **Built-in web channel** — Start with `npx @rozek/nanoclaw` and open your browser. No messaging app required. Full-featured chat UI with Markdown, math (KaTeX), syntax highlighting, and Mermaid diagrams. Multi-session, persistent, accessible from the LAN. *(Added in this fork — see [NanoClaw_with_Web-Support.md](NanoClaw_with_Web-Support.md))*
 - **Multi-channel messaging** - Talk to your assistant from WhatsApp, Telegram, Discord, Slack, or Gmail. Add channels with skills like `/add-whatsapp` or `/add-telegram`. Run one or many at the same time.
 - **Isolated group context** - Each group has its own `CLAUDE.md` memory, isolated filesystem, and runs in its own container sandbox with only that filesystem mounted to it.
 - **Main channel** - Your private channel (self-chat) for admin control; every group is completely isolated
@@ -183,7 +183,7 @@ For the full architecture details, see [docs/SPEC.md](docs/SPEC.md).
 
 Key files:
 - `src/index.ts` - Orchestrator: state, message loop, agent invocation
-- `src/cli.ts` - CLI entry point (enables `npx nanoclaw`) *(added in this fork)*
+- `src/cli.ts` - CLI entry point (enables `npx @rozek/nanoclaw`) *(added in this fork)*
 - `src/channels/web.ts` - Built-in web channel: HTTP server + embedded browser UI *(added in this fork)*
 - `src/channels/registry.ts` - Channel registry (self-registration at startup)
 - `src/ipc.ts` - IPC watcher and task processing
@@ -210,7 +210,7 @@ Agents run in containers, not behind application-level permission checks. They c
 
 **Should I protect the web UI with a token?**
 
-Yes, if NanoClaw is accessible from your LAN or the internet. Pass `--token mySecretToken` to `npx nanoclaw`. See [NanoClaw_with_Web-Support.md](NanoClaw_with_Web-Support.md) for details.
+Yes, if NanoClaw is accessible from your LAN or the internet. Pass `--token mySecretToken` to `npx @rozek/nanoclaw`. See [NanoClaw_with_Web-Support.md](NanoClaw_with_Web-Support.md) for details.
 
 **Why no configuration files?**
 

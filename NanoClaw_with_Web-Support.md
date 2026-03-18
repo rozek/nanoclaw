@@ -10,7 +10,7 @@ Two files were added or changed relative to the upstream project:
 
 | File | What changed |
 |------|-------------|
-| `src/cli.ts` | **New.** CLI entry point — enables `npx nanoclaw` |
+| `src/cli.ts` | **New.** CLI entry point — enables `npx @rozek/nanoclaw` |
 | `src/channels/web.ts` | **New.** Built-in HTTP server with a full browser chat UI |
 | `package.json` | Added `"bin": {"nanoclaw": "dist/cli.js"}` for `npx` support |
 
@@ -23,7 +23,7 @@ Everything else remains unchanged. No existing file was modified in a breaking w
 No cloning, no `npm install` — just run:
 
 ```bash
-npx nanoclaw
+npx @rozek/nanoclaw
 ```
 
 Then open **http://localhost:3099** in your browser.
@@ -45,7 +45,7 @@ Then open **http://localhost:3099** in your browser.
 ### Simplest start
 
 ```bash
-npx nanoclaw
+npx @rozek/nanoclaw
 ```
 
 Auto-detects the container runtime (Docker first, then Apple Container). Binds to `0.0.0.0:3099`.
@@ -54,23 +54,23 @@ Auto-detects the container runtime (Docker first, then Apple Container). Binds t
 
 ```bash
 # Custom port
-npx nanoclaw --port 8080
+npx @rozek/nanoclaw --port 8080
 
 # Custom workspace (directory NanoClaw works in)
-npx nanoclaw --workspace ~/my-workspace
+npx @rozek/nanoclaw --workspace ~/my-workspace
 
 # Token protection — recommended when accessible from the LAN
-npx nanoclaw --token mySecretToken
+npx @rozek/nanoclaw --token mySecretToken
 
 # Explicit container runtime
-npx nanoclaw --sandbox docker
-npx nanoclaw --sandbox apple
+npx @rozek/nanoclaw --sandbox docker
+npx @rozek/nanoclaw --sandbox apple
 
 # With an Anthropic API key (for users without Pro/Max)
-npx nanoclaw --key sk-ant-...
+npx @rozek/nanoclaw --key sk-ant-...
 
 # Combine options
-npx nanoclaw --port 8080 --workspace ~/my-workspace --token mySecretToken --sandbox docker
+npx @rozek/nanoclaw --port 8080 --workspace ~/my-workspace --token mySecretToken --sandbox docker
 ```
 
 ### All CLI options
@@ -188,7 +188,7 @@ On connect, the server immediately sends the current `typing`, `status`, and `cw
 Token-based authentication is optional but recommended when NanoClaw is reachable from the LAN:
 
 ```bash
-npx nanoclaw --token mySecretToken
+npx @rozek/nanoclaw --token mySecretToken
 ```
 
 Clients authenticate via:
@@ -274,7 +274,7 @@ npm run build
 # 3. Run
 node dist/cli.js [options]
 # or equivalently:
-npx nanoclaw [options]
+npx @rozek/nanoclaw [options]
 ```
 
 To apply changes and rebuild in one step:
