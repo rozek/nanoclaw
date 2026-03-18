@@ -145,6 +145,39 @@ export function _setRegisteredGroups(
 }
 
 /**
+ * Classify an Anthropic SDK error string and return a user-facing message
+ * plus whether the error is permanent (no retry) or transient (retry).
+ * Returns null if the error is not a recognized API error.
+ */
+function formatApiError(error: string): { message: string; permanent: boolean } | null {
+  if (/401|unauthorized|invalid.*key|expired.*key|authentication/i.test(error)) {
+    return {
+      message: '⚠️ Anthropic-Anmeldung fehlgeschlagen (401). Bitte prüfe die API-Konfiguration.',
+      permanent: true,
+    };
+  }
+  if (/429|rate.?limit/i.test(error)) {
+    return {
+      message: '⚠️ Anthropic-Anfragelimit erreicht (429). Ich versuche es in Kürze erneut.',
+      permanent: false,
+    };
+  }
+  if (/529|503|overload|unavailable/i.test(error)) {
+    return {
+      message: '⚠️ Anthropic ist gerade überlastet. Ich versuche es in Kürze erneut.',
+      permanent: false,
+    };
+  }
+  if (/\b500\b|internal.server.error/i.test(error)) {
+    return {
+      message: '⚠️ Anthropic-Serverfehler (500). Ich versuche es in Kürze erneut.',
+      permanent: false,
+    };
+  }
+  return null;
+}
+
+/**
  * Process all pending messages for a group.
  * Called by the GroupQueue when it's this group's turn.
  */
@@ -236,6 +269,24 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
     if (result.status === 'error') {
       hadError = true;
+      if (result.error && !outputSentToUser) {
+        const apiError = formatApiError(result.error);
+        if (apiError) {
+          logger.info(
+            { group: group.name, permanent: apiError.permanent },
+            'Anthropic API error detected, notifying user',
+          );
+          try {
+            await channel.sendMessage(chatJid, apiError.message);
+            // For permanent errors (e.g. 401), mark as "output sent" to prevent
+            // cursor rollback and infinite retry. For transient errors (429/529/500),
+            // leave outputSentToUser=false so the cursor rolls back and retries.
+            if (apiError.permanent) {
+              outputSentToUser = true;
+            }
+          } catch { /* ignore send failure */ }
+        }
+      }
     }
   });
 
@@ -470,7 +521,7 @@ function ensureContainerSystemRunning(): void {
   cleanupOrphans();
 }
 
-async function main(): Promise<void> {
+export async function main(): Promise<void> {
   ensureContainerSystemRunning();
   initDatabase();
   logger.info('Database initialized');

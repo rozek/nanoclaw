@@ -109,31 +109,42 @@ async function runTask(
   );
 
   const groups = deps.registeredGroups();
-  const group = Object.values(groups).find(
+  let group = Object.values(groups).find(
     (g) => g.folder === task.group_folder,
   );
 
   if (!group) {
-    logger.error(
-      { taskId: task.id, groupFolder: task.group_folder },
-      'Group not found for task',
-    );
-    logTaskRun({
-      task_id: task.id,
-      run_at: new Date().toISOString(),
-      duration_ms: Date.now() - startTime,
-      status: 'error',
-      result: null,
-      error: `Group not found: ${task.group_folder}`,
-    });
-    return;
+    // Fall back to the first isMain group so that legacy tasks created with
+    // group_folder='main' still run after a web-channel migration.
+    const fallback = Object.values(groups).find((g) => g.isMain === true);
+    if (fallback) {
+      logger.warn(
+        { taskId: task.id, groupFolder: task.group_folder, fallback: fallback.folder },
+        'Group not found for task, falling back to main group',
+      );
+      group = fallback;
+    } else {
+      logger.error(
+        { taskId: task.id, groupFolder: task.group_folder },
+        'Group not found for task',
+      );
+      logTaskRun({
+        task_id: task.id,
+        run_at: new Date().toISOString(),
+        duration_ms: Date.now() - startTime,
+        status: 'error',
+        result: null,
+        error: `Group not found: ${task.group_folder}`,
+      });
+      return;
+    }
   }
 
   // Update tasks snapshot for container to read (filtered by group)
   const isMain = group.isMain === true;
   const tasks = getAllTasks();
   writeTasksSnapshot(
-    task.group_folder,
+    group.folder,
     isMain,
     tasks.map((t) => ({
       id: t.id,
@@ -174,14 +185,14 @@ async function runTask(
       {
         prompt: task.prompt,
         sessionId,
-        groupFolder: task.group_folder,
+        groupFolder: group.folder,
         chatJid: task.chat_jid,
         isMain,
         isScheduledTask: true,
         assistantName: ASSISTANT_NAME,
       },
       (proc, containerName) =>
-        deps.onProcess(task.chat_jid, proc, containerName, task.group_folder),
+        deps.onProcess(task.chat_jid, proc, containerName, group.folder),
       async (streamedOutput: ContainerOutput) => {
         if (streamedOutput.result) {
           result = streamedOutput.result;

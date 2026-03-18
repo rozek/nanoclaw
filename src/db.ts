@@ -119,6 +119,20 @@ function createSchema(database: Database.Database): void {
     /* column already exists */
   }
 
+  // Add name_updated_at column if it doesn't exist (migration for existing DBs)
+  try {
+    database.exec(`ALTER TABLE chats ADD COLUMN name_updated_at INTEGER DEFAULT 0`);
+  } catch {
+    /* column already exists */
+  }
+
+  // Add cwd column if it doesn't exist (migration for existing DBs)
+  try {
+    database.exec(`ALTER TABLE chats ADD COLUMN cwd TEXT DEFAULT ''`);
+  } catch {
+    /* column already exists */
+  }
+
   // Add channel and is_group columns if they don't exist (migration for existing DBs)
   try {
     database.exec(`ALTER TABLE chats ADD COLUMN channel TEXT`);
@@ -199,17 +213,21 @@ export function storeChatMetadata(
 }
 
 /**
- * Update chat name without changing timestamp for existing chats.
- * New chats get the current time as their initial timestamp.
- * Used during group metadata sync.
+ * Update chat name, guarded by a timestamp comparison.
+ * The name is only written if nameUpdatedAt is >= the currently stored name_updated_at,
+ * so that an older push from another client can never overwrite a newer rename.
+ * New chats (INSERT path) always get the supplied values.
  */
-export function updateChatName(chatJid: string, name: string): void {
+export function updateChatName(chatJid: string, name: string, nameUpdatedAt: number = Date.now()): void {
   db.prepare(
     `
-    INSERT INTO chats (jid, name, last_message_time) VALUES (?, ?, ?)
-    ON CONFLICT(jid) DO UPDATE SET name = excluded.name
+    INSERT INTO chats (jid, name, last_message_time, name_updated_at) VALUES (?, ?, ?, ?)
+    ON CONFLICT(jid) DO UPDATE SET
+      name = excluded.name,
+      name_updated_at = excluded.name_updated_at
+    WHERE excluded.name_updated_at >= chats.name_updated_at
   `,
-  ).run(chatJid, name, new Date().toISOString());
+  ).run(chatJid, name, new Date().toISOString(), nameUpdatedAt);
 }
 
 export interface ChatInfo {
@@ -218,6 +236,8 @@ export interface ChatInfo {
   last_message_time: string;
   channel: string;
   is_group: number;
+  name_updated_at: number;
+  cwd: string;
 }
 
 /**
@@ -227,12 +247,82 @@ export function getAllChats(): ChatInfo[] {
   return db
     .prepare(
       `
-    SELECT jid, name, last_message_time, channel, is_group
+    SELECT jid, name, last_message_time, channel, is_group,
+           COALESCE(name_updated_at, 0) AS name_updated_at,
+           COALESCE(cwd, '') AS cwd
     FROM chats
     ORDER BY last_message_time DESC
   `,
     )
     .all() as ChatInfo[];
+}
+
+/**
+ * Get the user-defined display order for web sessions.
+ * Returns an array of chat JIDs (local@web-<id>) in the desired order.
+ * An empty array means no custom order has been saved yet.
+ */
+export function getWebSessionOrder(): string[] {
+  const row = db
+    .prepare(`SELECT value FROM router_state WHERE key = 'web_session_order'`)
+    .get() as { value: string } | undefined;
+  try { return row ? (JSON.parse(row.value) as string[]) : []; } catch { return []; }
+}
+
+/**
+ * Persist the user-defined display order for web sessions.
+ * @param jids - Ordered array of chat JIDs (local@web-<id>)
+ */
+export function setWebSessionOrder(jids: string[]): void {
+  db.prepare(
+    `INSERT OR REPLACE INTO router_state (key, value) VALUES ('web_session_order', ?)`,
+  ).run(JSON.stringify(jids));
+}
+
+/**
+ * Persist the current working directory for a web session.
+ */
+export function updateChatCwd(chatJid: string, cwd: string): void {
+  db.prepare(
+    `UPDATE chats SET cwd = ? WHERE jid = ?`,
+  ).run(cwd, chatJid);
+}
+
+/**
+ * Get full conversation history for a chat (both user and bot messages),
+ * ordered chronologically. Used by the web channel history endpoint.
+ */
+export function getConversation(
+  chatJid: string,
+  limit: number = 500,
+): NewMessage[] {
+  return db
+    .prepare(
+      `SELECT id, chat_jid, sender, sender_name, content, timestamp,
+              is_from_me, is_bot_message
+       FROM messages
+       WHERE chat_jid = ? AND content != '' AND content IS NOT NULL
+       ORDER BY timestamp ASC
+       LIMIT ?`,
+    )
+    .all(chatJid, limit) as NewMessage[];
+}
+
+/**
+ * Delete a chat and all its messages from the database.
+ * Used by the web channel when a session is deleted.
+ */
+export function deleteChat(chatJid: string): void {
+  db.prepare(`DELETE FROM messages WHERE chat_jid = ?`).run(chatJid);
+  db.prepare(`DELETE FROM chats WHERE jid = ?`).run(chatJid);
+}
+
+/**
+ * Delete only the messages of a chat, keeping the chat entry itself.
+ * Used by the web channel /clear command.
+ */
+export function clearChatMessages(chatJid: string): void {
+  db.prepare(`DELETE FROM messages WHERE chat_jid = ?`).run(chatJid);
 }
 
 /**
@@ -361,6 +451,14 @@ export function getMessagesSince(
   return db
     .prepare(sql)
     .all(chatJid, sinceTimestamp, `${botPrefix}:%`, limit) as NewMessage[];
+}
+
+/**
+ * Delete a single message by its ID.
+ * Used by the web channel when the user clicks the trash icon on a message.
+ */
+export function deleteMessage(id: string): void {
+  db.prepare(`DELETE FROM messages WHERE id = ?`).run(id);
 }
 
 export function createTask(
