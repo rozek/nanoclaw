@@ -121,7 +121,9 @@ function createSchema(database: Database.Database): void {
 
   // Add name_updated_at column if it doesn't exist (migration for existing DBs)
   try {
-    database.exec(`ALTER TABLE chats ADD COLUMN name_updated_at INTEGER DEFAULT 0`);
+    database.exec(
+      `ALTER TABLE chats ADD COLUMN name_updated_at INTEGER DEFAULT 0`,
+    );
   } catch {
     /* column already exists */
   }
@@ -218,7 +220,11 @@ export function storeChatMetadata(
  * so that an older push from another client can never overwrite a newer rename.
  * New chats (INSERT path) always get the supplied values.
  */
-export function updateChatName(chatJid: string, name: string, nameUpdatedAt: number = Date.now()): void {
+export function updateChatName(
+  chatJid: string,
+  name: string,
+  nameUpdatedAt: number = Date.now(),
+): void {
   db.prepare(
     `
     INSERT INTO chats (jid, name, last_message_time, name_updated_at) VALUES (?, ?, ?, ?)
@@ -266,7 +272,11 @@ export function getWebSessionOrder(): string[] {
   const row = db
     .prepare(`SELECT value FROM router_state WHERE key = 'web_session_order'`)
     .get() as { value: string } | undefined;
-  try { return row ? (JSON.parse(row.value) as string[]) : []; } catch { return []; }
+  try {
+    return row ? (JSON.parse(row.value) as string[]) : [];
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -283,9 +293,7 @@ export function setWebSessionOrder(jids: string[]): void {
  * Persist the current working directory for a web session.
  */
 export function updateChatCwd(chatJid: string, cwd: string): void {
-  db.prepare(
-    `UPDATE chats SET cwd = ? WHERE jid = ?`,
-  ).run(cwd, chatJid);
+  db.prepare(`UPDATE chats SET cwd = ? WHERE jid = ?`).run(cwd, chatJid);
 }
 
 /**
