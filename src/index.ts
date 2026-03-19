@@ -149,28 +149,36 @@ export function _setRegisteredGroups(
  * plus whether the error is permanent (no retry) or transient (retry).
  * Returns null if the error is not a recognized API error.
  */
-function formatApiError(error: string): { message: string; permanent: boolean } | null {
-  if (/401|unauthorized|invalid.*key|expired.*key|authentication/i.test(error)) {
+function formatApiError(
+  error: string,
+): { message: string; permanent: boolean } | null {
+  if (
+    /401|unauthorized|invalid.*key|expired.*key|authentication/i.test(error)
+  ) {
     return {
-      message: '⚠️ Anthropic-Anmeldung fehlgeschlagen (401). Bitte prüfe die API-Konfiguration.',
+      message:
+        '⚠️ Anthropic-Anmeldung fehlgeschlagen (401). Bitte prüfe die API-Konfiguration.',
       permanent: true,
     };
   }
   if (/429|rate.?limit/i.test(error)) {
     return {
-      message: '⚠️ Anthropic-Anfragelimit erreicht (429). Ich versuche es in Kürze erneut.',
+      message:
+        '⚠️ Anthropic-Anfragelimit erreicht (429). Ich versuche es in Kürze erneut.',
       permanent: false,
     };
   }
   if (/529|503|overload|unavailable/i.test(error)) {
     return {
-      message: '⚠️ Anthropic ist gerade überlastet. Ich versuche es in Kürze erneut.',
+      message:
+        '⚠️ Anthropic ist gerade überlastet. Ich versuche es in Kürze erneut.',
       permanent: false,
     };
   }
   if (/\b500\b|internal.server.error/i.test(error)) {
     return {
-      message: '⚠️ Anthropic-Serverfehler (500). Ich versuche es in Kürze erneut.',
+      message:
+        '⚠️ Anthropic-Serverfehler (500). Ich versuche es in Kürze erneut.',
       permanent: false,
     };
   }
@@ -284,7 +292,9 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
             if (apiError.permanent) {
               outputSentToUser = true;
             }
-          } catch { /* ignore send failure */ }
+          } catch {
+            /* ignore send failure */
+          }
         }
       }
     }

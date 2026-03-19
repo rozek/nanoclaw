@@ -6,12 +6,28 @@ import path from 'path';
 import { logger } from '../logger.js';
 import { NewMessage } from '../types.js';
 import { ChannelOpts, registerChannel } from './registry.js';
-import { getAllChats, getConversation, storeMessage, storeChatMetadata, updateChatName, updateChatCwd, deleteChat, clearChatMessages, deleteMessage, getWebSessionOrder, setWebSessionOrder } from '../db.js';
+import {
+  getAllChats,
+  getConversation,
+  storeMessage,
+  storeChatMetadata,
+  updateChatName,
+  updateChatCwd,
+  deleteChat,
+  clearChatMessages,
+  deleteMessage,
+  getWebSessionOrder,
+  setWebSessionOrder,
+} from '../db.js';
 import { DATA_DIR, GROUPS_DIR } from '../config.js';
 
 // NANOCLAW_PORT/HOST/TOKEN are the canonical env var names; WEB_CHANNEL_* kept for backward compat.
-const PORT  = parseInt(process.env.NANOCLAW_PORT || process.env.WEB_CHANNEL_PORT || '3099', 10);
-const HOST  = process.env.NANOCLAW_HOST || process.env.WEB_CHANNEL_HOST || '127.0.0.1';
+const PORT = parseInt(
+  process.env.NANOCLAW_PORT || process.env.WEB_CHANNEL_PORT || '3099',
+  10,
+);
+const HOST =
+  process.env.NANOCLAW_HOST || process.env.WEB_CHANNEL_HOST || '127.0.0.1';
 /** Optional access token for the web interface. Empty string = no protection. */
 const TOKEN = process.env.NANOCLAW_TOKEN || '';
 const WEB_JID_PREFIX = 'local@web-';
@@ -20,14 +36,14 @@ const CRON_GROUP_FOLDER = 'web-cron'; // separate folder so cron container gets 
 const GROUP_NAME = 'Web Chat';
 const CRON_SESSION_ID = 'cron';
 const CRON_SESSION_NAME = 'Cron Jobs';
-const MAX_BODY_SIZE        = 1  * 1024 * 1024; // 1 MB  — default for all POST bodies
+const MAX_BODY_SIZE = 1 * 1024 * 1024; // 1 MB  — default for all POST bodies
 const MAX_UPLOAD_BODY_SIZE = 10 * 1024 * 1024; // 10 MB — for /upload (Base64 file data)
 
 // Per-session SSE clients and ephemeral UI state
 const sseClients = new Map<string, Set<http.ServerResponse>>();
 const sessionCwds = new Map<string, string>();
-const sessionTyping = new Map<string, boolean>();      // true while agent is processing
-const sessionStatus = new Map<string, string>();       // last status SSE payload (or 'null')
+const sessionTyping = new Map<string, boolean>(); // true while agent is processing
+const sessionStatus = new Map<string, string>(); // last status SSE payload (or 'null')
 const registeredSessions = new Set<string>();
 
 /**
@@ -38,7 +54,10 @@ const registeredSessions = new Set<string>();
  * Returns null if the result is empty (name should be rejected).
  */
 function sanitizeSessionName(raw: string): string | null {
-  const cleaned = raw.replace(/\p{Cc}/gu, '').trim().slice(0, 256);
+  const cleaned = raw
+    .replace(/\p{Cc}/gu, '')
+    .trim()
+    .slice(0, 256);
   return cleaned || null;
 }
 
@@ -51,7 +70,11 @@ function parseCookies(req: http.IncomingMessage): Record<string, string> {
       if (eq < 1) return [];
       const k = part.slice(0, eq).trim();
       const v = part.slice(eq + 1).trim();
-      try { return [[k, decodeURIComponent(v)]]; } catch { return [[k, v]]; }
+      try {
+        return [[k, decodeURIComponent(v)]];
+      } catch {
+        return [[k, v]];
+      }
     }),
   );
 }
@@ -72,7 +95,10 @@ function parseCookies(req: http.IncomingMessage): Record<string, string> {
  * Must be called before response headers are written. If it returns false the
  * response has already been sent — return from the caller immediately.
  */
-function authorizeRequest(req: http.IncomingMessage, res: http.ServerResponse): boolean {
+function authorizeRequest(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+): boolean {
   if (!TOKEN) return true;
   const cookies = parseCookies(req);
   if (cookies['nanoclaw_token'] === TOKEN) return true;
@@ -83,10 +109,15 @@ function authorizeRequest(req: http.IncomingMessage, res: http.ServerResponse): 
   if (raw !== undefined) {
     try {
       if (decodeURIComponent(raw) === TOKEN) {
-        res.setHeader('Set-Cookie', `nanoclaw_token=${TOKEN}; HttpOnly; SameSite=Strict; Path=/`);
+        res.setHeader(
+          'Set-Cookie',
+          `nanoclaw_token=${TOKEN}; HttpOnly; SameSite=Strict; Path=/`,
+        );
         return true;
       }
-    } catch { /* ignore malformed param */ }
+    } catch {
+      /* ignore malformed param */
+    }
   }
   res.writeHead(401, {
     'Content-Type': 'application/json',
@@ -127,14 +158,19 @@ function collectBody(
   });
   req.on('error', () => {
     tooLarge = true; // prevent callback from firing after a request error
-    if (!res.headersSent) { res.writeHead(400); res.end('Bad request'); }
+    if (!res.headersSent) {
+      res.writeHead(400);
+      res.end('Bad request');
+    }
   });
 }
 
 /** Set CWD in the in-memory cache AND persist it to the DB. */
 function setCwd(sessionId: string, cwd: string): void {
   sessionCwds.set(sessionId, cwd);
-  try { updateChatCwd(WEB_JID_PREFIX + sessionId, cwd); } catch {}
+  try {
+    updateChatCwd(WEB_JID_PREFIX + sessionId, cwd);
+  } catch {}
 }
 
 function getOrCreateClientSet(sessionId: string): Set<http.ServerResponse> {
@@ -142,17 +178,27 @@ function getOrCreateClientSet(sessionId: string): Set<http.ServerResponse> {
   return sseClients.get(sessionId)!;
 }
 
-function broadcastToSession(sessionId: string, event: string, data: string): void {
+function broadcastToSession(
+  sessionId: string,
+  event: string,
+  data: string,
+): void {
   const clients = sseClients.get(sessionId);
   if (!clients) return;
   const payload = `event: ${event}\ndata: ${data}\n\n`;
   for (const client of clients) {
-    try { client.write(payload); } catch { clients.delete(client); }
+    try {
+      client.write(payload);
+    } catch {
+      clients.delete(client);
+    }
   }
 }
 
 function sessionIdFromJid(jid: string): string {
-  return jid.startsWith(WEB_JID_PREFIX) ? jid.slice(WEB_JID_PREFIX.length) : jid;
+  return jid.startsWith(WEB_JID_PREFIX)
+    ? jid.slice(WEB_JID_PREFIX.length)
+    : jid;
 }
 
 function sidFromUrl(url: string | undefined): string {
@@ -1226,8 +1272,11 @@ class WebChannel {
     registeredSessions.add(sessionId);
     const jid = WEB_JID_PREFIX + sessionId;
     // Preserve custom name if already set (e.g. by /session-name endpoint)
-    const existing = getAllChats().find(c => c.jid === jid);
-    const chatName = (existing?.name && existing.name !== GROUP_NAME) ? existing.name : GROUP_NAME;
+    const existing = getAllChats().find((c) => c.jid === jid);
+    const chatName =
+      existing?.name && existing.name !== GROUP_NAME
+        ? existing.name
+        : GROUP_NAME;
     if (this.registerGroup) {
       // Each web session gets its own IPC-isolated folder so that parallel
       // containers don't accidentally read each other's follow-up IPC messages.
@@ -1246,11 +1295,19 @@ class WebChannel {
         // and .claude directory while getting an isolated IPC directory.
         const groupLink = path.join(GROUPS_DIR, folder);
         if (!fs.existsSync(groupLink)) {
-          try { fs.symlinkSync('main', groupLink); } catch { /* already exists */ }
+          try {
+            fs.symlinkSync('main', groupLink);
+          } catch {
+            /* already exists */
+          }
         }
         const sessionsLink = path.join(DATA_DIR, 'sessions', folder);
         if (!fs.existsSync(sessionsLink)) {
-          try { fs.symlinkSync('main', sessionsLink); } catch { /* already exists */ }
+          try {
+            fs.symlinkSync('main', sessionsLink);
+          } catch {
+            /* already exists */
+          }
         }
       }
       this.registerGroup(jid, {
@@ -1264,7 +1321,13 @@ class WebChannel {
     }
     // Use epoch timestamp so MAX() in storeChatMetadata never overwrites the actual
     // last_message_time — we only want to register name/channel/isGroup here.
-    this.onChatMetadata(jid, '1970-01-01T00:00:00.000Z', chatName, 'web', false);
+    this.onChatMetadata(
+      jid,
+      '1970-01-01T00:00:00.000Z',
+      chatName,
+      'web',
+      false,
+    );
   }
 
   /**
@@ -1275,14 +1338,22 @@ class WebChannel {
   private cleanupOrphanedSessionLinks(): void {
     const known = new Set(
       getAllChats()
-        .map(c => c.jid)
-        .filter(j => j.startsWith(WEB_JID_PREFIX) && j !== WEB_JID_PREFIX + CRON_SESSION_ID)
-        .map(j => j.slice(WEB_JID_PREFIX.length)),
+        .map((c) => c.jid)
+        .filter(
+          (j) =>
+            j.startsWith(WEB_JID_PREFIX) &&
+            j !== WEB_JID_PREFIX + CRON_SESSION_ID,
+        )
+        .map((j) => j.slice(WEB_JID_PREFIX.length)),
     );
 
     for (const dir of [GROUPS_DIR, path.join(DATA_DIR, 'sessions')]) {
       let entries: string[];
-      try { entries = fs.readdirSync(dir); } catch { continue; }
+      try {
+        entries = fs.readdirSync(dir);
+      } catch {
+        continue;
+      }
       for (const entry of entries) {
         if (!entry.startsWith('web-')) continue;
         const sid = entry.slice('web-'.length);
@@ -1290,7 +1361,9 @@ class WebChannel {
           try {
             fs.unlinkSync(path.join(dir, entry));
             logger.debug({ entry, dir }, 'Removed orphaned session symlink');
-          } catch { /* ignore — may already be gone */ }
+          } catch {
+            /* ignore — may already be gone */
+          }
         }
       }
     }
@@ -1305,12 +1378,15 @@ class WebChannel {
       if (!authorizeRequest(req, res)) return;
 
       if (req.method === 'GET' && req.url?.split('?')[0] === '/') {
-        const html = HTML.replaceAll('__SERVER_ADDRESS__', `${getLocalIp()}:${PORT}`);
+        const html = HTML.replaceAll(
+          '__SERVER_ADDRESS__',
+          `${getLocalIp()}:${PORT}`,
+        );
         res.writeHead(200, {
           'Content-Type': 'text/html; charset=utf-8',
           'Cache-Control': 'no-cache, no-store, must-revalidate',
-          'Pragma': 'no-cache',
-          'Expires': '0',
+          Pragma: 'no-cache',
+          Expires: '0',
         });
         res.end(html);
         return;
@@ -1322,8 +1398,8 @@ class WebChannel {
       if (req.method === 'GET' && req.url === '/sessions') {
         const chats = getAllChats();
         const sessions = chats
-          .filter(c => c.jid.startsWith(WEB_JID_PREFIX))
-          .map(c => {
+          .filter((c) => c.jid.startsWith(WEB_JID_PREFIX))
+          .map((c) => {
             const id = c.jid.slice(WEB_JID_PREFIX.length);
             return {
               id,
@@ -1335,8 +1411,10 @@ class WebChannel {
           });
         // Strip WEB_JID_PREFIX from stored JIDs so clients see plain session IDs
         const rawOrder = getWebSessionOrder();
-        const order = rawOrder.map(jid =>
-          jid.startsWith(WEB_JID_PREFIX) ? jid.slice(WEB_JID_PREFIX.length) : jid,
+        const order = rawOrder.map((jid) =>
+          jid.startsWith(WEB_JID_PREFIX)
+            ? jid.slice(WEB_JID_PREFIX.length)
+            : jid,
         );
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ sessions, order }));
@@ -1348,11 +1426,14 @@ class WebChannel {
         collectBody(req, res, (body) => {
           try {
             const { order } = JSON.parse(body);
-            if (!Array.isArray(order) || !order.every(id => typeof id === 'string')) {
+            if (
+              !Array.isArray(order) ||
+              !order.every((id) => typeof id === 'string')
+            ) {
               throw new Error('order must be an array of strings');
             }
             // Store as full JIDs internally
-            setWebSessionOrder(order.map(id => WEB_JID_PREFIX + id));
+            setWebSessionOrder(order.map((id) => WEB_JID_PREFIX + id));
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end('{"ok":true}');
           } catch {
@@ -1372,7 +1453,10 @@ class WebChannel {
               const safeName = sanitizeSessionName(name);
               if (safeName) {
                 // Server-side guard: updateChatName only writes if nameUpdatedAt >= stored value
-                const ts = typeof nameUpdatedAt === 'number' ? nameUpdatedAt : Date.now();
+                const ts =
+                  typeof nameUpdatedAt === 'number'
+                    ? nameUpdatedAt
+                    : Date.now();
                 updateChatName(WEB_JID_PREFIX + sid, safeName, ts);
               }
             }
@@ -1401,8 +1485,16 @@ class WebChannel {
               // Clean up per-session symlinks (user sessions only; cron has real dirs)
               if (sid !== CRON_SESSION_ID) {
                 const folder = 'web-' + sid;
-                try { fs.unlinkSync(path.join(GROUPS_DIR, folder)); } catch { /* ignore */ }
-                try { fs.unlinkSync(path.join(DATA_DIR, 'sessions', folder)); } catch { /* ignore */ }
+                try {
+                  fs.unlinkSync(path.join(GROUPS_DIR, folder));
+                } catch {
+                  /* ignore */
+                }
+                try {
+                  fs.unlinkSync(path.join(DATA_DIR, 'sessions', folder));
+                } catch {
+                  /* ignore */
+                }
               }
             }
             res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -1456,9 +1548,9 @@ class WebChannel {
         const sid = sidFromUrl(req.url);
         const jid = WEB_JID_PREFIX + sid;
         const messages = getConversation(jid, 500);
-        const history = messages.map(m => ({
+        const history = messages.map((m) => ({
           text: m.content,
-          cls: (m.is_bot_message || m.is_from_me) ? 'bot' : 'user',
+          cls: m.is_bot_message || m.is_from_me ? 'bot' : 'user',
           id: m.id,
         }));
         res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -1479,18 +1571,24 @@ class WebChannel {
         clients.add(res);
         // Restore CWD from DB if not in memory (e.g. after server restart)
         if (!sessionCwds.has(sessionId)) {
-          const chat = getAllChats().find(c => c.jid === WEB_JID_PREFIX + sessionId);
+          const chat = getAllChats().find(
+            (c) => c.jid === WEB_JID_PREFIX + sessionId,
+          );
           if (chat?.cwd) sessionCwds.set(sessionId, chat.cwd);
         }
         const cwd = sessionCwds.get(sessionId);
         if (cwd) res.write(`event: cwd\ndata: ${JSON.stringify(cwd)}\n\n`);
         // Always send current typing/status state so client syncs correctly on reconnect
-        res.write(`event: typing\ndata: ${sessionTyping.get(sessionId) ? 'true' : 'false'}\n\n`);
+        res.write(
+          `event: typing\ndata: ${sessionTyping.get(sessionId) ? 'true' : 'false'}\n\n`,
+        );
         const status = sessionStatus.get(sessionId);
         res.write(`event: status\ndata: ${status ?? 'null'}\n\n`);
         req.on('close', () => clients.delete(res));
         // Register in DB after SSE is established — so other browsers can discover this session
-        try { this.ensureSession(sessionId); } catch {}
+        try {
+          this.ensureSession(sessionId);
+        } catch {}
         return;
       }
 
@@ -1507,7 +1605,11 @@ class WebChannel {
       if (req.method === 'POST' && req.url === '/message') {
         collectBody(req, res, (body) => {
           try {
-            const { content, sessionId = 'default', id: clientMsgId } = JSON.parse(body);
+            const {
+              content,
+              sessionId = 'default',
+              id: clientMsgId,
+            } = JSON.parse(body);
             if (content && typeof content === 'string') {
               this.ensureSession(sessionId);
               const jid = WEB_JID_PREFIX + sessionId;
@@ -1521,9 +1623,11 @@ class WebChannel {
 
               // Use client-provided ID if valid (allows delete button to work immediately),
               // otherwise generate one server-side.
-              const msgId = (typeof clientMsgId === 'string' && /^[\w-]{1,80}$/.test(clientMsgId))
-                ? clientMsgId
-                : `web-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+              const msgId =
+                typeof clientMsgId === 'string' &&
+                /^[\w-]{1,80}$/.test(clientMsgId)
+                  ? clientMsgId
+                  : `web-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
               const msg: NewMessage = {
                 id: msgId,
                 chat_jid: jid,
@@ -1558,7 +1662,10 @@ class WebChannel {
               // Validate that the resolved path stays within the workspace
               const workspace = process.cwd();
               const resolved = path.resolve(workspace, cwd);
-              if (resolved !== workspace && !resolved.startsWith(workspace + path.sep)) {
+              if (
+                resolved !== workspace &&
+                !resolved.startsWith(workspace + path.sep)
+              ) {
                 res.writeHead(400, { 'Content-Type': 'application/json' });
                 res.end('{"error":"CWD outside workspace"}');
                 return;
@@ -1579,29 +1686,38 @@ class WebChannel {
 
       if (req.method === 'POST' && req.url === '/upload') {
         // File data is Base64-encoded (~33 % overhead → ~7.5 MB effective file size).
-        collectBody(req, res, (body) => {
-          try {
-            const { filename, data, sessionId = 'default' } = JSON.parse(body);
-            if (!filename || !data) throw new Error('Missing fields');
-            const safeName = path.basename(filename);
-            const groupDir = path.join(process.cwd(), 'groups', GROUP_FOLDER);
-            const cwd = sessionCwds.get(sessionId) ?? '';
-            const dir = cwd ? path.join(groupDir, cwd) : groupDir;
-            // Verify upload directory stays within groupDir (defense-in-depth)
-            if (dir !== groupDir && !dir.startsWith(groupDir + path.sep)) {
-              throw new Error('Upload path outside workspace');
+        collectBody(
+          req,
+          res,
+          (body) => {
+            try {
+              const {
+                filename,
+                data,
+                sessionId = 'default',
+              } = JSON.parse(body);
+              if (!filename || !data) throw new Error('Missing fields');
+              const safeName = path.basename(filename);
+              const groupDir = path.join(process.cwd(), 'groups', GROUP_FOLDER);
+              const cwd = sessionCwds.get(sessionId) ?? '';
+              const dir = cwd ? path.join(groupDir, cwd) : groupDir;
+              // Verify upload directory stays within groupDir (defense-in-depth)
+              if (dir !== groupDir && !dir.startsWith(groupDir + path.sep)) {
+                throw new Error('Upload path outside workspace');
+              }
+              fs.mkdirSync(dir, { recursive: true });
+              const filePath = path.join(dir, safeName);
+              fs.writeFileSync(filePath, Buffer.from(data, 'base64'));
+              const relPath = path.relative(groupDir, filePath);
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ ok: true, path: relPath }));
+            } catch (e: any) {
+              res.writeHead(400, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ ok: false, error: e.message }));
             }
-            fs.mkdirSync(dir, { recursive: true });
-            const filePath = path.join(dir, safeName);
-            fs.writeFileSync(filePath, Buffer.from(data, 'base64'));
-            const relPath = path.relative(groupDir, filePath);
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ ok: true, path: relPath }));
-          } catch (e: any) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ ok: false, error: e.message }));
-          }
-        }, MAX_UPLOAD_BODY_SIZE);
+          },
+          MAX_UPLOAD_BODY_SIZE,
+        );
         return;
       }
 
@@ -1613,10 +1729,18 @@ class WebChannel {
       };
       const urlPath = req.url?.split('?')[0] ?? '';
       if (req.method === 'GET' && staticFiles[urlPath]) {
-        const filePath = path.join(process.cwd(), 'groups', GROUP_FOLDER, urlPath.slice(1));
+        const filePath = path.join(
+          process.cwd(),
+          'groups',
+          GROUP_FOLDER,
+          urlPath.slice(1),
+        );
         try {
           const data = fs.readFileSync(filePath);
-          res.writeHead(200, { 'Content-Type': staticFiles[urlPath], 'Cache-Control': 'max-age=3600' });
+          res.writeHead(200, {
+            'Content-Type': staticFiles[urlPath],
+            'Cache-Control': 'max-age=3600',
+          });
           res.end(data);
         } catch {
           res.writeHead(404);
@@ -1644,7 +1768,11 @@ class WebChannel {
     } catch {}
 
     // Remove symlinks for sessions that no longer exist in the DB
-    try { this.cleanupOrphanedSessionLinks(); } catch { /* non-critical */ }
+    try {
+      this.cleanupOrphanedSessionLinks();
+    } catch {
+      /* non-critical */
+    }
   }
 
   async sendMessage(jid: string, text: string): Promise<void> {
@@ -1674,7 +1802,11 @@ class WebChannel {
       storeChatMetadata(jid, botTs);
     } catch {}
     // Broadcast {text, id} so the client can assign a trash button with the correct DB id
-    broadcastToSession(sessionId, 'message', JSON.stringify({ text, id: botMsgId }));
+    broadcastToSession(
+      sessionId,
+      'message',
+      JSON.stringify({ text, id: botMsgId }),
+    );
   }
 
   async setTyping(jid: string, isTyping: boolean): Promise<void> {
@@ -1692,7 +1824,9 @@ class WebChannel {
 
   setStatus(jid: string, tool: string | null, inputSnippet?: string): void {
     const sessionId = sessionIdFromJid(jid);
-    const payload = tool ? JSON.stringify({ tool, input: inputSnippet ?? null }) : 'null';
+    const payload = tool
+      ? JSON.stringify({ tool, input: inputSnippet ?? null })
+      : 'null';
     if (tool) sessionStatus.set(sessionId, payload);
     else sessionStatus.delete(sessionId);
     broadcastToSession(sessionId, 'status', payload);
