@@ -81,7 +81,7 @@ All live updates arrive over a single SSE connection (`GET /events?sid=…`):
 | `status` | `{"tool":"…","input":"…"}` or `null` | Display active tool (e.g. "searching…") |
 | `cwd` | path string | Update working-directory display in header |
 
-On connect, the server immediately sends the current `typing`, `status`, and `cwd` state so reconnects are seamless.
+On connect, the server immediately sends the current `typing`, `status`, and `cwd` state so reconnects are seamless. Additionally, the client fetches `GET /pwd?sid=…` in the SSE `open` handler to reliably sync the CWD even if the `cwd` event arrives before the session is fully initialized.
 
 ### Working Folder (CWD)
 
@@ -93,6 +93,7 @@ On connect, the server immediately sends the current `typing`, `status`, and `cw
 - Persisted in `chats.cwd` (SQLite) — survives server restarts
 - Also cached in `localStorage` per session
 - NanoClaw ships with built-in skills (`container/skills/cwd/` and `container/skills/pwd/`) that instruct the AI how to use these commands
+- All CWD values (from agent output, `/cwd` command, or `POST /cwd`) are passed through `sanitizeCwd()` which resolves paths relative to the workspace root and rejects any attempt to escape it (absolute paths outside the workspace are silently clamped to `''`)
 
 ### File Upload
 

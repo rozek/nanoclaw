@@ -165,8 +165,19 @@ function collectBody(
   });
 }
 
+/** Resolve and clamp a raw CWD value to within the workspace root. Returns '' on escape attempt. */
+function sanitizeCwd(rawCwd: string): string {
+  if (!rawCwd) return '';
+  const workspace = process.cwd();
+  const resolved = path.resolve(workspace, rawCwd);
+  if (resolved === workspace) return '';
+  if (!resolved.startsWith(workspace + path.sep)) return ''; // escape attempt
+  return path.relative(workspace, resolved);
+}
+
 /** Set CWD in the in-memory cache AND persist it to the DB. */
-function setCwd(sessionId: string, cwd: string): void {
+function setCwd(sessionId: string, rawCwd: string): void {
+  const cwd = sanitizeCwd(rawCwd);
   sessionCwds.set(sessionId, cwd);
   try {
     updateChatCwd(WEB_JID_PREFIX + sessionId, cwd);
@@ -534,7 +545,7 @@ const HTML = `<!DOCTYPE html>
     // ── Header ────────────────────────────────────────────────────────────
     function updateHeader(cwd) {
       headerTitle.textContent = 'NanoClaw \u2014 ' + serverAddress;
-      headerCwd.textContent = ' \u2014 /' + (cwd || '');
+      headerCwd.textContent = ' \u2014 ' + (cwd?.startsWith('/') ? cwd : '/' + (cwd || ''));
     }
 
     // ── Messages ──────────────────────────────────────────────────────────
@@ -867,6 +878,17 @@ const HTML = `<!DOCTYPE html>
         if (_s?.name) pushNameToServer(sessionId, _s.name, _s.nameUpdatedAt ?? _s.createdAt ?? Date.now());
         // On reconnect (not initial connect): re-fetch history to catch missed messages
         // (e.g. bot response or typing: false delivered while the connection was down).
+        // Always fetch the current CWD from the server on (re)connect so the header
+        // reflects the server's ground truth — not just a stale localStorage value.
+        const sidAtOpen = sessionId;
+        fetch('/pwd?sid=' + sessionId).then(r => r.json()).then(data => {
+          if (sessionId !== sidAtOpen || sseGeneration !== myGen) return; // stale
+          if (data.cwd) {
+            saveCwd(sessionId, data.cwd);
+            sessionStorage.setItem('currentCwd', data.cwd);
+            updateHeader(data.cwd);
+          }
+        }).catch(() => {});
         if (wasConnected) {
           // Reset stale typing/status before re-fetching history. The SSE's
           // initial typing/status events will restore the correct state.
