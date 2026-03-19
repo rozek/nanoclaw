@@ -8,6 +8,5 @@ export { escapeXml, formatMessages } from './router.js';
 export declare function getAvailableGroups(): import('./container-runner.js').AvailableGroup[];
 /** @internal - exported for testing */
 export declare function _setRegisteredGroups(groups: Record<string, RegisteredGroup>): void;
-/** Export for use by cli.ts entry point. */
 export declare function main(): Promise<void>;
 //# sourceMappingURL=index.d.ts.map

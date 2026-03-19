@@ -4,8 +4,11 @@ import path from 'path';
 import {
   ASSISTANT_NAME,
   CREDENTIAL_PROXY_PORT,
+  DATA_DIR,
+  GROUPS_DIR,
   IDLE_TIMEOUT,
   POLL_INTERVAL,
+  STORE_DIR,
   TIMEZONE,
   TRIGGER_PATTERN,
 } from './config.js';
@@ -628,7 +631,26 @@ function ensureContainerSystemRunning(): void {
 }
 
 /** Export for use by cli.ts entry point. */
+function initWorkspace(): void {
+  const dirs = [
+    STORE_DIR,
+    GROUPS_DIR,
+    path.join(GROUPS_DIR, 'main'),
+    path.join(GROUPS_DIR, 'global'),
+    path.join(DATA_DIR, 'ipc'),
+    path.join(DATA_DIR, 'sessions'),
+    path.join(GROUPS_DIR, 'main', 'Tools'),
+    path.join(GROUPS_DIR, 'main', 'Skills'),
+    path.join(GROUPS_DIR, 'main', 'MCP-Servers'),
+    path.join(GROUPS_DIR, 'main', 'conversations'),
+  ];
+  for (const dir of dirs) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+}
+
 export async function main(): Promise<void> {
+  initWorkspace();
   ensureContainerSystemRunning();
   initDatabase();
   logger.info('Database initialized');
