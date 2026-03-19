@@ -198,6 +198,116 @@ NANOCLAW_SANDBOX=docker   # or: apple
 
 ---
 
+## Authentication / Credential Proxy
+
+NanoClaw runs a local **credential proxy** that intercepts every Anthropic API call made by agent containers and injects real credentials — so containers never see the actual secrets. There are two auth modes:
+
+| Mode | When it applies |
+|------|----------------|
+| `api-key` | `ANTHROPIC_API_KEY` is set (in `.env` or environment) |
+| `oauth` | No API key — NanoClaw uses the Claude Code OAuth token |
+
+### OAuth Mode — Claude Pro / Max Subscription
+
+> **This is the recommended mode.** No API credit balance required; usage is covered by your subscription.
+
+**Setup: fully automatic.**
+
+NanoClaw reads the OAuth token that Claude Code stores during `claude login` — no manual steps needed:
+
+- **macOS**: reads from the system Keychain (entry `"Claude Code-credentials"`)
+- **Linux / Windows**: reads from `~/.claude/.credentials.json`
+
+**Just make sure Claude Code is logged in** (`claude --version` should work without errors), then start NanoClaw normally:
+
+```bash
+npx @rozek/nanoclaw
+```
+
+At startup you should see in the log:
+
+```
+OAuth token auto-detected from Claude Code credentials.
+Credential proxy started { authMode: "oauth" }
+```
+
+**If the automatic detection fails** (e.g. unusual install location), you can supply the token manually. On macOS, extract it from the Keychain:
+
+```bash
+security find-generic-password -s "Claude Code-credentials" -w
+```
+
+The output is a JSON object — copy the `accessToken` value (`sk-ant-oat01-...`) and set it as an environment variable before starting NanoClaw:
+
+```bash
+export CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...
+npx @rozek/nanoclaw
+```
+
+Or add it persistently to the `.env` file in the NanoClaw workspace:
+
+```
+CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...
+```
+
+> **Note:** OAuth access tokens expire (typically after ~1 hour). NanoClaw re-reads the token from the Keychain on every restart. If you get authentication errors after a long session, simply restart NanoClaw.
+
+### API Key Mode — Pay-as-you-go
+
+For users **without** a Pro/Max subscription. Requires a funded credit balance at [console.anthropic.com](https://console.anthropic.com).
+
+Supply the key once via `--key` — NanoClaw writes it to `.env` automatically so you don't have to repeat it on future runs:
+
+```bash
+npx @rozek/nanoclaw --key sk-ant-...
+```
+
+Alternatively, set it as an environment variable:
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+npx @rozek/nanoclaw
+```
+
+Or add it directly to the `.env` file in the workspace:
+
+```
+ANTHROPIC_API_KEY=sk-ant-...
+```
+
+At startup you should see:
+
+```
+Credential proxy started { authMode: "api-key" }
+```
+
+### Switching from API Key to OAuth
+
+If you previously used an API key and now want to switch to your subscription:
+
+1. Remove `ANTHROPIC_API_KEY` from the `.env` file in the NanoClaw workspace (or delete the file if it contains nothing else)
+2. Make sure `ANTHROPIC_API_KEY` is not set as a shell environment variable (`unset ANTHROPIC_API_KEY`)
+3. Restart NanoClaw — it will auto-detect the OAuth token
+
+### Priority Order
+
+NanoClaw resolves credentials in this order (highest priority first):
+
+| Priority | Source | Mode triggered |
+|----------|--------|---------------|
+| 1 | `ANTHROPIC_API_KEY` in workspace `.env` | `api-key` |
+| 2 | `ANTHROPIC_API_KEY` environment variable | `api-key` |
+| 3 | `CLAUDE_CODE_OAUTH_TOKEN` in workspace `.env` | `oauth` |
+| 4 | `ANTHROPIC_AUTH_TOKEN` in workspace `.env` | `oauth` |
+| 5 | `CLAUDE_CODE_OAUTH_TOKEN` environment variable | `oauth` |
+| 6 | `ANTHROPIC_AUTH_TOKEN` environment variable | `oauth` |
+| 7 | macOS Keychain (`"Claude Code-credentials"`) — auto-detected | `oauth` |
+| 8 | `~/.claude/.credentials.json` — auto-detected | `oauth` |
+
+As soon as an `ANTHROPIC_API_KEY` is found anywhere in the chain, `api-key` mode is used and all OAuth sources are ignored.
+
+---
+
 ## HTTP API Reference
 
 | Method | Path | Description |
