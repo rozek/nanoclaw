@@ -667,6 +667,7 @@ function initWorkspace(): void {
     path.join(GROUPS_DIR, 'global'),
     path.join(DATA_DIR, 'ipc'),
     path.join(DATA_DIR, 'sessions'),
+    path.join(DATA_DIR, 'sessions', 'main'),
     path.join(GROUPS_DIR, 'main', 'Tools'),
     path.join(GROUPS_DIR, 'main', 'Skills'),
     path.join(GROUPS_DIR, 'main', 'MCP-Servers'),
