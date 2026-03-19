@@ -80,13 +80,13 @@ async function cli(): Promise<void> {
     ({ values } = parseArgs({
       args: process.argv.slice(2),
       options: {
-        host: { type: 'string' },
-        port: { type: 'string' },
+        host:      { type: 'string' },
+        port:      { type: 'string' },
         workspace: { type: 'string' },
-        key: { type: 'string' },
-        token: { type: 'string' },
-        sandbox: { type: 'string' },
-        help: { type: 'boolean', short: 'h' },
+        key:       { type: 'string' },
+        token:     { type: 'string' },
+        sandbox:   { type: 'string' },
+        help:      { type: 'boolean', short: 'h' },
       },
       allowPositionals: false,
       strict: true,
@@ -103,24 +103,18 @@ async function cli(): Promise<void> {
 
   // --- Merge: CLI flags override NANOCLAW_* env vars -------------------------
   // Each setting resolves in priority order: CLI flag > NANOCLAW_* env var > default
-  const host = (values.host as string | undefined) ?? process.env.NANOCLAW_HOST;
-  const portStr =
-    (values.port as string | undefined) ?? process.env.NANOCLAW_PORT;
-  const key = (values.key as string | undefined) ?? process.env.NANOCLAW_KEY;
-  const token =
-    (values.token as string | undefined) ?? process.env.NANOCLAW_TOKEN;
-  const workspace =
-    (values.workspace as string | undefined) ?? process.env.NANOCLAW_WORKSPACE;
-  const sandboxRaw =
-    (values.sandbox as string | undefined) ?? process.env.NANOCLAW_SANDBOX;
+  const host      = (values.host      as string | undefined) ?? process.env.NANOCLAW_HOST;
+  const portStr   = (values.port      as string | undefined) ?? process.env.NANOCLAW_PORT;
+  const key       = (values.key       as string | undefined) ?? process.env.NANOCLAW_KEY;
+  const token     = (values.token     as string | undefined) ?? process.env.NANOCLAW_TOKEN;
+  const workspace = (values.workspace as string | undefined) ?? process.env.NANOCLAW_WORKSPACE;
+  const sandboxRaw= (values.sandbox   as string | undefined) ?? process.env.NANOCLAW_SANDBOX;
 
   // --- Validate --port -------------------------------------------------------
   if (portStr !== undefined) {
     const port = parseInt(portStr, 10);
     if (Number.isNaN(port) || port < 1 || port > 65535) {
-      die(
-        `Invalid port value "${portStr}". Must be an integer between 1 and 65535.`,
-      );
+      die(`Invalid port value "${portStr}". Must be an integer between 1 and 65535.`);
     }
   }
 
@@ -129,9 +123,7 @@ async function cli(): Promise<void> {
 
   if (sandboxRaw) {
     if (sandboxRaw !== 'docker' && sandboxRaw !== 'apple') {
-      die(
-        `Invalid sandbox value "${sandboxRaw}". Must be "docker" or "apple".`,
-      );
+      die(`Invalid sandbox value "${sandboxRaw}". Must be "docker" or "apple".`);
     }
     sandboxType = sandboxRaw as 'docker' | 'apple';
   } else {
@@ -139,8 +131,8 @@ async function cli(): Promise<void> {
     if (!detected) {
       die(
         'No container sandbox found.\n' +
-          '  • Install Docker Desktop (https://www.docker.com/products/docker-desktop)\n' +
-          '  • Or use macOS Sequoia 15+ with the Apple Container Runtime.',
+        '  • Install Docker Desktop (https://www.docker.com/products/docker-desktop)\n' +
+        '  • Or use macOS Sequoia 15+ with the Apple Container Runtime.'
       );
     }
     sandboxType = detected;
@@ -161,8 +153,8 @@ async function cli(): Promise<void> {
   if (!checkBinary('claude --version')) {
     die(
       '"claude" command not found.\n' +
-        '  Install Claude Code via: npm install -g @anthropic-ai/claude-code\n' +
-        '  or visit https://claude.ai/code',
+      '  Install Claude Code via: npm install -g @anthropic-ai/claude-code\n' +
+      '  or visit https://claude.ai/code'
     );
   }
 
@@ -171,7 +163,7 @@ async function cli(): Promise<void> {
     if (!checkBinary('docker info')) {
       die(
         'Docker is not running.\n' +
-          '  Please start Docker Desktop or the Docker Engine daemon.',
+        '  Please start Docker Desktop or the Docker Engine daemon.'
       );
     }
   } else {
@@ -179,7 +171,7 @@ async function cli(): Promise<void> {
     if (!checkBinary('container --version')) {
       die(
         'Apple Container Runtime not available.\n' +
-          '  Requires macOS Sequoia 15 or later.',
+        '  Requires macOS Sequoia 15 or later.'
       );
     }
   }
@@ -187,18 +179,16 @@ async function cli(): Promise<void> {
   // --- Apply settings to process.env so downstream modules pick them up ------
   // web.ts reads NANOCLAW_HOST / NANOCLAW_PORT / NANOCLAW_TOKEN;
   // credential-proxy reads ANTHROPIC_API_KEY.
-  if (host) process.env.NANOCLAW_HOST = host;
-  if (portStr) process.env.NANOCLAW_PORT = portStr;
-  if (key) process.env.ANTHROPIC_API_KEY = key;
-  if (token) process.env.NANOCLAW_TOKEN = token;
-  process.env.NANOCLAW_SANDBOX = sandboxType;
+  if (host)    process.env.NANOCLAW_HOST      = host;
+  if (portStr) process.env.NANOCLAW_PORT      = portStr;
+  if (key)     process.env.ANTHROPIC_API_KEY  = key;
+  if (token)   process.env.NANOCLAW_TOKEN     = token;
+  process.env.NANOCLAW_SANDBOX  = sandboxType;
   process.env.CONTAINER_RUNTIME = sandboxType; // backward compat for container-runtime.ts
 
   // --- Start NanoClaw --------------------------------------------------------
   const tokenHint = token ? ' — token protection enabled' : '';
-  console.log(
-    `Starting NanoClaw (sandbox: ${sandboxType}, port: ${process.env.NANOCLAW_PORT ?? 3099}${tokenHint})…`,
-  );
+  console.log(`Starting NanoClaw (sandbox: ${sandboxType}, port: ${process.env.NANOCLAW_PORT ?? 3099}${tokenHint})…`);
   const { main } = await import('./index.js');
   await main();
 }

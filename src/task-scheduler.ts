@@ -109,7 +109,9 @@ async function runTask(
   );
 
   const groups = deps.registeredGroups();
-  let group = Object.values(groups).find((g) => g.folder === task.group_folder);
+  let group = Object.values(groups).find(
+    (g) => g.folder === task.group_folder,
+  );
 
   if (!group) {
     // Fall back to the first isMain group so that legacy tasks created with
@@ -117,11 +119,7 @@ async function runTask(
     const fallback = Object.values(groups).find((g) => g.isMain === true);
     if (fallback) {
       logger.warn(
-        {
-          taskId: task.id,
-          groupFolder: task.group_folder,
-          fallback: fallback.folder,
-        },
+        { taskId: task.id, groupFolder: task.group_folder, fallback: fallback.folder },
         'Group not found for task, falling back to main group',
       );
       group = fallback;
