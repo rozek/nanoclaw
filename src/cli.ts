@@ -224,7 +224,10 @@ async function cli(): Promise<void> {
   const host = (values.host as string | undefined) ?? process.env.NANOCLAW_HOST;
   const portStr =
     (values.port as string | undefined) ?? process.env.NANOCLAW_PORT;
-  const key = (values.key as string | undefined) ?? process.env.NANOCLAW_KEY;
+  const key =
+    (values.key as string | undefined) ??
+    process.env.NANOCLAW_KEY ??
+    process.env.ANTHROPIC_API_KEY;
   const token =
     (values.token as string | undefined) ?? process.env.NANOCLAW_TOKEN;
   const workspace =

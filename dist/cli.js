@@ -199,7 +199,9 @@ async function cli() {
     // Each setting resolves in priority order: CLI flag > NANOCLAW_* env var > default
     const host = values.host ?? process.env.NANOCLAW_HOST;
     const portStr = values.port ?? process.env.NANOCLAW_PORT;
-    const key = values.key ?? process.env.NANOCLAW_KEY;
+    const key = values.key ??
+        process.env.NANOCLAW_KEY ??
+        process.env.ANTHROPIC_API_KEY;
     const token = values.token ?? process.env.NANOCLAW_TOKEN;
     const workspace = values.workspace ?? process.env.NANOCLAW_WORKSPACE;
     const sandboxRaw = values.sandbox ?? process.env.NANOCLAW_SANDBOX;
