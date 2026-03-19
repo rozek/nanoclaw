@@ -10,7 +10,7 @@
  */
 
 import { execSync, spawnSync } from 'child_process';
-import { existsSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { parseArgs } from 'util';
@@ -102,6 +102,43 @@ function buildContainerImage(sandboxType: 'docker' | 'apple'): void {
   });
   if (r.status !== 0) {
     console.warn(`Container build exited with code ${r.status}.`);
+  }
+}
+
+// ─── .env persistence ────────────────────────────────────────────────────────
+
+/**
+ * Write (or update) ANTHROPIC_API_KEY in the workspace .env file so that
+ * the credential proxy can pick it up on this and future runs.
+ * Preserves all other lines already present in the file.
+ */
+function writeApiKeyToEnv(apiKey: string): void {
+  const envFile = resolve(process.cwd(), '.env');
+  let lines: string[] = [];
+  if (existsSync(envFile)) {
+    try {
+      lines = readFileSync(envFile, 'utf-8').split('\n');
+    } catch {
+      /* ignore read errors — file will be overwritten */
+    }
+  }
+
+  const keyLine = `ANTHROPIC_API_KEY=${apiKey}`;
+  const idx = lines.findIndex((l) =>
+    l.trimStart().startsWith('ANTHROPIC_API_KEY='),
+  );
+  if (idx >= 0) {
+    if (lines[idx] === keyLine) return; // already up to date
+    lines[idx] = keyLine;
+  } else {
+    lines.push(keyLine);
+  }
+
+  try {
+    writeFileSync(envFile, lines.join('\n'), 'utf-8');
+    console.log('.env updated with ANTHROPIC_API_KEY.');
+  } catch (err) {
+    console.warn(`Could not write .env file: ${err}`);
   }
 }
 
@@ -274,6 +311,12 @@ async function cli(): Promise<void> {
   if (!containerImageExists(sandboxType)) {
     buildContainerImage(sandboxType);
   }
+
+  // --- Persist API key to .env so credential-proxy can read it ---------------
+  // credential-proxy reads only from the .env file (not process.env) to keep
+  // secrets out of child-process environments.  Writing it here means the user
+  // only has to supply --key (or NANOCLAW_KEY) once; subsequent runs reuse it.
+  if (key) writeApiKeyToEnv(key);
 
   // --- Apply settings to process.env so downstream modules pick them up ------
   // web.ts reads NANOCLAW_HOST / NANOCLAW_PORT / NANOCLAW_TOKEN;
