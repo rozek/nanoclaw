@@ -73,7 +73,9 @@ function containerImageExists(sandboxType) {
     return checkBinary(`${sandboxType === 'apple' ? 'container' : 'docker'} image inspect nanoclaw-agent:latest`);
 }
 function buildContainerImage(sandboxType) {
-    const buildScript = resolve(process.cwd(), 'container', 'build.sh');
+    // build.sh lives inside the npm package, not in the user's workspace
+    const pkgDir = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+    const buildScript = resolve(pkgDir, 'container', 'build.sh');
     if (!existsSync(buildScript)) {
         console.warn('container/build.sh not found — skipping container build.');
         return;
@@ -81,7 +83,7 @@ function buildContainerImage(sandboxType) {
     console.log('Building container image nanoclaw-agent:latest (this may take a few minutes)…');
     const r = spawnSync('bash', [buildScript], {
         stdio: 'inherit',
-        cwd: resolve(process.cwd(), 'container'),
+        cwd: resolve(pkgDir, 'container'),
         env: {
             ...process.env,
             CONTAINER_RUNTIME: sandboxType === 'apple' ? 'container' : 'docker',
