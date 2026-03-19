@@ -1,24 +1,33 @@
 import fs from 'fs';
 import path from 'path';
-import { logger } from './logger.js';
 /**
- * Parse the .env file and return values for the requested keys.
- * Does NOT load anything into process.env — callers decide what to
- * do with the values. This keeps secrets out of the process environment
- * so they don't leak to child processes.
+ * Return values for the requested keys, resolved in priority order:
+ *   1. .env file in the current working directory
+ *   2. process.env (shell / container environment)
+ *
+ * Does NOT write anything into process.env — callers decide what to do
+ * with the values.  Secrets in .env take precedence so a committed key
+ * always wins over an accidental ambient variable.
  */
 export function readEnvFile(keys) {
+    const wanted = new Set(keys);
+    // Start with process.env as the lowest-priority source
+    const result = {};
+    for (const key of wanted) {
+        const val = process.env[key];
+        if (val)
+            result[key] = val;
+    }
+    // Override with values from .env (higher priority)
     const envFile = path.join(process.cwd(), '.env');
     let content;
     try {
         content = fs.readFileSync(envFile, 'utf-8');
     }
-    catch (err) {
-        logger.debug({ err }, '.env file not found, using defaults');
-        return {};
+    catch {
+        // No .env file — process.env values (if any) are used as-is
+        return result;
     }
-    const result = {};
-    const wanted = new Set(keys);
     for (const line of content.split('\n')) {
         const trimmed = line.trim();
         if (!trimmed || trimmed.startsWith('#'))

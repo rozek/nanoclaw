@@ -11,6 +11,7 @@
 
 import { execSync, spawnSync } from 'child_process';
 import { existsSync, readFileSync, writeFileSync } from 'fs';
+import { homedir } from 'os';
 import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { parseArgs } from 'util';
@@ -140,6 +141,57 @@ function writeApiKeyToEnv(apiKey: string): void {
   } catch (err) {
     console.warn(`Could not write .env file: ${err}`);
   }
+}
+
+// ─── OAuth token auto-detection ──────────────────────────────────────────────
+
+/**
+ * Read the Claude Code OAuth access token from the platform's credential store.
+ * - macOS: reads from the system Keychain (service "Claude Code-credentials")
+ * - Linux/Windows: reads from ~/.claude/.credentials.json
+ *
+ * Returns the accessToken string, or null if not found / not applicable.
+ * The token is passed to the credential proxy via process.env so containers
+ * can use the Pro/Max subscription without any manual setup.
+ */
+function readClaudeOAuthToken(): string | null {
+  if (process.platform === 'darwin') {
+    for (const svc of ['Claude Code-credentials', 'Claude Code']) {
+      try {
+        const json = execSync(
+          `security find-generic-password -s "${svc}" -w 2>/dev/null`,
+          { encoding: 'utf-8' },
+        ).trim();
+        if (!json) continue;
+        const parsed = JSON.parse(json) as Record<string, unknown>;
+        const token = (
+          parsed?.claudeAiOauth as Record<string, unknown> | undefined
+        )?.accessToken;
+        if (typeof token === 'string' && token) return token;
+      } catch {
+        /* entry missing or keychain locked */
+      }
+    }
+    return null;
+  }
+
+  // Linux / Windows fallback
+  const credFile = resolve(homedir(), '.claude', '.credentials.json');
+  if (existsSync(credFile)) {
+    try {
+      const parsed = JSON.parse(readFileSync(credFile, 'utf-8')) as Record<
+        string,
+        unknown
+      >;
+      const token = (
+        parsed?.claudeAiOauth as Record<string, unknown> | undefined
+      )?.accessToken;
+      if (typeof token === 'string' && token) return token;
+    } catch {
+      /* ignore parse errors */
+    }
+  }
+  return null;
 }
 
 // ─── First-time setup ────────────────────────────────────────────────────────
@@ -320,6 +372,23 @@ async function cli(): Promise<void> {
   // secrets out of child-process environments.  Writing it here means the user
   // only has to supply --key (or NANOCLAW_KEY) once; subsequent runs reuse it.
   if (key) writeApiKeyToEnv(key);
+
+  // --- Auto-detect OAuth token from Claude Code credentials (Pro/Max users) --
+  // If no API key was given, try to read the OAuth token that Claude Code stores
+  // in the macOS Keychain or ~/.claude/.credentials.json.  We set it in
+  // process.env; readEnvFile() falls back to process.env so the credential proxy
+  // picks it up automatically — no manual setup required.
+  if (
+    !key &&
+    !process.env.CLAUDE_CODE_OAUTH_TOKEN &&
+    !process.env.ANTHROPIC_AUTH_TOKEN
+  ) {
+    const oauthToken = readClaudeOAuthToken();
+    if (oauthToken) {
+      process.env.CLAUDE_CODE_OAUTH_TOKEN = oauthToken;
+      console.log('OAuth token auto-detected from Claude Code credentials.');
+    }
+  }
 
   // --- Apply settings to process.env so downstream modules pick them up ------
   // web.ts reads NANOCLAW_HOST / NANOCLAW_PORT / NANOCLAW_TOKEN;
