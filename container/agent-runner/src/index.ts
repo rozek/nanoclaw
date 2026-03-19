@@ -106,6 +106,8 @@ async function readStdin(): Promise<string> {
 
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
 const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
+const STATUS_START_MARKER = '---NANOCLAW_STATUS_START---';
+const STATUS_END_MARKER = '---NANOCLAW_STATUS_END---';
 
 function writeOutput(output: ContainerOutput): void {
   console.log(OUTPUT_START_MARKER);
@@ -113,9 +115,102 @@ function writeOutput(output: ContainerOutput): void {
   console.log(OUTPUT_END_MARKER);
 }
 
+function writeStatus(tool: string, inputSnippet?: string): void {
+  try {
+    const payload: { tool: string; input?: string } = { tool };
+    if (inputSnippet) payload.input = inputSnippet.slice(0, 200);
+    console.log(STATUS_START_MARKER);
+    console.log(JSON.stringify(payload));
+    console.log(STATUS_END_MARKER);
+  } catch { /* non-critical */ }
+}
+
+/** Extract a short readable snippet from a tool's input object. */
+function toolInputSnippet(input: unknown): string | undefined {
+  if (!input || typeof input !== 'object') return undefined;
+  const obj = input as Record<string, unknown>;
+  for (const key of ['command', 'prompt', 'query', 'url', 'path', 'file_path', 'pattern', 'text']) {
+    if (typeof obj[key] === 'string' && obj[key]) {
+      return (obj[key] as string).split('\n')[0].slice(0, 120);
+    }
+  }
+  for (const val of Object.values(obj)) {
+    if (typeof val === 'string' && val) return val.split('\n')[0].slice(0, 120);
+  }
+  return undefined;
+}
+
 function log(message: string): void {
   console.error(`[agent-runner] ${message}`);
 }
+
+// ---------------------------------------------------------------------------
+// External MCP servers — loaded from /workspace/group/MCP-Servers/*.json
+// ---------------------------------------------------------------------------
+
+interface McpServerConfig {
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  url?: string;
+}
+
+/** Extract a human-readable message from an unknown thrown value. */
+function getErrorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * Scan /workspace/group/MCP-Servers/ for *.json files.
+ * Each valid file becomes an additional MCP server in the next query.
+ * Invalid / unparseable files are logged and skipped.
+ */
+function loadExternalMcpServers(): Record<string, McpServerConfig> {
+  const serversDir = '/workspace/group/MCP-Servers';
+  const result: Record<string, McpServerConfig> = {};
+
+  let files: string[];
+  try {
+    files = fs.readdirSync(serversDir).filter(f => f.endsWith('.json'));
+  } catch {
+    return result; // directory doesn't exist or isn't readable
+  }
+
+  for (const file of files) {
+    const filePath = path.join(serversDir, file);
+    try {
+      const config = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+      if (typeof config !== 'object' || config === null) {
+        log(`MCP-Servers/${file}: not an object, skipping`);
+        continue;
+      }
+      if (!config.command && !config.url) {
+        log(`MCP-Servers/${file}: missing 'command' or 'url', skipping`);
+        continue;
+      }
+      const name = path.basename(file, '.json');
+      result[name] = config;
+      log(`External MCP server loaded: ${name}`);
+    } catch (err) {
+      log(`MCP-Servers/${file}: ${getErrorMessage(err)}`);
+    }
+  }
+
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// Reserved directories — injected into every query's system prompt
+// ---------------------------------------------------------------------------
+
+const RESERVED_DIRS_DOC = `## Reserved Workspace Directories
+
+Your group workspace at \`/workspace/group/\` contains these special directories:
+
+- **\`Tools/\`** — Custom MCP tools. Each subdirectory with \`TOOL.md\` + \`TOOL.js\` is registered as a callable tool. Create new subdirectories here to extend your capabilities.
+- **\`Skills/\`** — Skill definitions (\`.md\` files). Check this folder proactively and apply matching skills automatically when a user request fits.
+- **\`MCP-Servers/\`** — External MCP server configs (\`.json\` files, each with \`command\` for stdio or \`url\` for HTTP/SSE). Changes are picked up on the next message.
+- **\`conversations/\`** — Archived conversation history. Search here to recall context from previous sessions.`;
 
 function getSessionSummary(sessionId: string, transcriptPath: string): string | null {
   const projectDir = path.dirname(transcriptPath);
@@ -133,7 +228,7 @@ function getSessionSummary(sessionId: string, transcriptPath: string): string | 
       return entry.summary;
     }
   } catch (err) {
-    log(`Failed to read sessions index: ${err instanceof Error ? err.message : String(err)}`);
+    log(`Failed to read sessions index: ${getErrorMessage(err)}`);
   }
 
   return null;
@@ -177,7 +272,7 @@ function createPreCompactHook(assistantName?: string): HookCallback {
 
       log(`Archived conversation to ${filePath}`);
     } catch (err) {
-      log(`Failed to archive transcript: ${err instanceof Error ? err.message : String(err)}`);
+      log(`Failed to archive transcript: ${getErrorMessage(err)}`);
     }
 
     return {};
@@ -290,13 +385,13 @@ function drainIpcInput(): string[] {
           messages.push(data.text);
         }
       } catch (err) {
-        log(`Failed to process input file ${file}: ${err instanceof Error ? err.message : String(err)}`);
+        log(`Failed to process input file ${file}: ${getErrorMessage(err)}`);
         try { fs.unlinkSync(filePath); } catch { /* ignore */ }
       }
     }
     return messages;
   } catch (err) {
-    log(`IPC drain error: ${err instanceof Error ? err.message : String(err)}`);
+    log(`IPC drain error: ${getErrorMessage(err)}`);
     return [];
   }
 }
@@ -335,6 +430,7 @@ async function runQuery(
   mcpServerPath: string,
   containerInput: ContainerInput,
   sdkEnv: Record<string, string | undefined>,
+  externalMcpServers: Record<string, McpServerConfig>,
   resumeAt?: string,
 ): Promise<{ newSessionId?: string; lastAssistantUuid?: string; closedDuringQuery: boolean }> {
   const stream = new MessageStream();
@@ -369,97 +465,115 @@ async function runQuery(
   // Load global CLAUDE.md as additional system context (shared across all groups)
   const globalClaudeMdPath = '/workspace/global/CLAUDE.md';
   let globalClaudeMd: string | undefined;
-  if (!containerInput.isMain && fs.existsSync(globalClaudeMdPath)) {
-    globalClaudeMd = fs.readFileSync(globalClaudeMdPath, 'utf-8');
+  if (!containerInput.isMain) {
+    try { globalClaudeMd = fs.readFileSync(globalClaudeMdPath, 'utf-8'); } catch { /* file absent */ }
   }
+
+  // Build system prompt append: global CLAUDE.md + reserved directories doc
+  const systemPromptParts: string[] = [];
+  if (globalClaudeMd) systemPromptParts.push(globalClaudeMd);
+  systemPromptParts.push(RESERVED_DIRS_DOC);
+  const systemPromptAppend = systemPromptParts.join('\n\n');
 
   // Discover additional directories mounted at /workspace/extra/*
   // These are passed to the SDK so their CLAUDE.md files are loaded automatically
   const extraDirs: string[] = [];
   const extraBase = '/workspace/extra';
-  if (fs.existsSync(extraBase)) {
-    for (const entry of fs.readdirSync(extraBase)) {
-      const fullPath = path.join(extraBase, entry);
-      if (fs.statSync(fullPath).isDirectory()) {
-        extraDirs.push(fullPath);
+  try {
+    for (const entry of fs.readdirSync(extraBase, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        extraDirs.push(path.join(extraBase, entry.name));
       }
     }
-  }
+  } catch { /* directory absent */ }
   if (extraDirs.length > 0) {
     log(`Additional directories: ${extraDirs.join(', ')}`);
   }
 
-  for await (const message of query({
-    prompt: stream,
-    options: {
-      cwd: '/workspace/group',
-      additionalDirectories: extraDirs.length > 0 ? extraDirs : undefined,
-      resume: sessionId,
-      resumeSessionAt: resumeAt,
-      systemPrompt: globalClaudeMd
-        ? { type: 'preset' as const, preset: 'claude_code' as const, append: globalClaudeMd }
-        : undefined,
-      allowedTools: [
-        'Bash',
-        'Read', 'Write', 'Edit', 'Glob', 'Grep',
-        'WebSearch', 'WebFetch',
-        'Task', 'TaskOutput', 'TaskStop',
-        'TeamCreate', 'TeamDelete', 'SendMessage',
-        'TodoWrite', 'ToolSearch', 'Skill',
-        'NotebookEdit',
-        'mcp__nanoclaw__*'
-      ],
-      env: sdkEnv,
-      permissionMode: 'bypassPermissions',
-      allowDangerouslySkipPermissions: true,
-      settingSources: ['project', 'user'],
-      mcpServers: {
-        nanoclaw: {
-          command: 'node',
-          args: [mcpServerPath],
-          env: {
-            NANOCLAW_CHAT_JID: containerInput.chatJid,
-            NANOCLAW_GROUP_FOLDER: containerInput.groupFolder,
-            NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
+  try {
+    for await (const message of query({
+      prompt: stream,
+      options: {
+        cwd: '/workspace/group',
+        additionalDirectories: extraDirs.length > 0 ? extraDirs : undefined,
+        resume: sessionId,
+        resumeSessionAt: resumeAt,
+        systemPrompt: { type: 'preset' as const, preset: 'claude_code' as const, append: systemPromptAppend },
+        allowedTools: [
+          'Bash',
+          'Read', 'Write', 'Edit', 'Glob', 'Grep',
+          'WebSearch', 'WebFetch',
+          'Task', 'TaskOutput', 'TaskStop',
+          'TeamCreate', 'TeamDelete', 'SendMessage',
+          'TodoWrite', 'ToolSearch', 'Skill',
+          'NotebookEdit',
+          'mcp__nanoclaw__*',
+          'mcp__*',
+        ],
+        env: sdkEnv,
+        permissionMode: 'bypassPermissions',
+        allowDangerouslySkipPermissions: true,
+        settingSources: ['project', 'user'],
+        mcpServers: {
+          nanoclaw: {
+            command: 'node',
+            args: [mcpServerPath],
+            env: {
+              NANOCLAW_CHAT_JID: containerInput.chatJid,
+              NANOCLAW_GROUP_FOLDER: containerInput.groupFolder,
+              NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
+            },
           },
+          ...externalMcpServers,
         },
-      },
-      hooks: {
-        PreCompact: [{ hooks: [createPreCompactHook(containerInput.assistantName)] }],
-      },
-    }
-  })) {
-    messageCount++;
-    const msgType = message.type === 'system' ? `system/${(message as { subtype?: string }).subtype}` : message.type;
-    log(`[msg #${messageCount}] type=${msgType}`);
+        hooks: {
+          PreCompact: [{ hooks: [createPreCompactHook(containerInput.assistantName)] }],
+        },
+      }
+    })) {
+      messageCount++;
+      const msgType = message.type === 'system' ? `system/${(message as { subtype?: string }).subtype}` : message.type;
+      log(`[msg #${messageCount}] type=${msgType}`);
 
-    if (message.type === 'assistant' && 'uuid' in message) {
-      lastAssistantUuid = (message as { uuid: string }).uuid;
-    }
+      if (message.type === 'assistant') {
+        if ('uuid' in message) lastAssistantUuid = (message as { uuid: string }).uuid;
+        // Emit STATUS for each tool_use / thinking block so the host can display progress
+        type ContentBlock = { type: string; name?: string; input?: unknown; thinking?: string };
+        const blocks: ContentBlock[] = (message as { message?: { content?: ContentBlock[] } }).message?.content ?? [];
+        for (const block of blocks) {
+          if (block.type === 'tool_use' && block.name) {
+            writeStatus(block.name, toolInputSnippet(block.input));
+          } else if (block.type === 'thinking') {
+            writeStatus('thinking');
+          }
+        }
+      }
 
-    if (message.type === 'system' && message.subtype === 'init') {
-      newSessionId = message.session_id;
-      log(`Session initialized: ${newSessionId}`);
-    }
+      if (message.type === 'system' && message.subtype === 'init') {
+        newSessionId = message.session_id;
+        log(`Session initialized: ${newSessionId}`);
+      }
 
-    if (message.type === 'system' && (message as { subtype?: string }).subtype === 'task_notification') {
-      const tn = message as { task_id: string; status: string; summary: string };
-      log(`Task notification: task=${tn.task_id} status=${tn.status} summary=${tn.summary}`);
-    }
+      if (message.type === 'system' && (message as { subtype?: string }).subtype === 'task_notification') {
+        const tn = message as { task_id: string; status: string; summary: string };
+        log(`Task notification: task=${tn.task_id} status=${tn.status} summary=${tn.summary}`);
+      }
 
-    if (message.type === 'result') {
-      resultCount++;
-      const textResult = 'result' in message ? (message as { result?: string }).result : null;
-      log(`Result #${resultCount}: subtype=${message.subtype}${textResult ? ` text=${textResult.slice(0, 200)}` : ''}`);
-      writeOutput({
-        status: 'success',
-        result: textResult || null,
-        newSessionId
-      });
+      if (message.type === 'result') {
+        resultCount++;
+        const textResult = 'result' in message ? (message as { result?: string }).result : null;
+        log(`Result #${resultCount}: subtype=${message.subtype}${textResult ? ` text=${textResult.slice(0, 200)}` : ''}`);
+        writeOutput({
+          status: 'success',
+          result: textResult || null,
+          newSessionId
+        });
+      }
     }
+  } finally {
+    ipcPolling = false; // always stop polling, even if query() throws
   }
 
-  ipcPolling = false;
   log(`Query done. Messages: ${messageCount}, results: ${resultCount}, lastAssistantUuid: ${lastAssistantUuid || 'none'}, closedDuringQuery: ${closedDuringQuery}`);
   return { newSessionId, lastAssistantUuid, closedDuringQuery };
 }
@@ -476,7 +590,7 @@ async function main(): Promise<void> {
     writeOutput({
       status: 'error',
       result: null,
-      error: `Failed to parse input: ${err instanceof Error ? err.message : String(err)}`
+      error: `Failed to parse input: ${getErrorMessage(err)}`
     });
     process.exit(1);
   }
@@ -505,13 +619,115 @@ async function main(): Promise<void> {
     prompt += '\n' + pending.join('\n');
   }
 
+  // --- Slash command handling ---
+  // Only known session slash commands are handled here. This prevents
+  // accidental interception of user prompts that happen to start with '/'.
+  const KNOWN_SESSION_COMMANDS = new Set(['/compact']);
+  const trimmedPrompt = prompt.trim();
+  const isSessionSlashCommand = KNOWN_SESSION_COMMANDS.has(trimmedPrompt);
+
+  if (isSessionSlashCommand) {
+    log(`Handling session command: ${trimmedPrompt}`);
+    let slashSessionId: string | undefined;
+    let compactBoundarySeen = false;
+    let hadError = false;
+    let resultEmitted = false;
+
+    try {
+      for await (const message of query({
+        prompt: trimmedPrompt,
+        options: {
+          cwd: '/workspace/group',
+          resume: sessionId,
+          systemPrompt: undefined,
+          allowedTools: [],
+          env: sdkEnv,
+          permissionMode: 'bypassPermissions' as const,
+          allowDangerouslySkipPermissions: true,
+          settingSources: ['project', 'user'] as const,
+          hooks: {
+            PreCompact: [{ hooks: [createPreCompactHook(containerInput.assistantName)] }],
+          },
+        },
+      })) {
+        const msgType = message.type === 'system'
+          ? `system/${(message as { subtype?: string }).subtype}`
+          : message.type;
+        log(`[slash-cmd] type=${msgType}`);
+
+        if (message.type === 'system' && message.subtype === 'init') {
+          slashSessionId = message.session_id;
+          log(`Session after slash command: ${slashSessionId}`);
+        }
+
+        // Observe compact_boundary to confirm compaction completed
+        if (message.type === 'system' && (message as { subtype?: string }).subtype === 'compact_boundary') {
+          compactBoundarySeen = true;
+          log('Compact boundary observed — compaction completed');
+        }
+
+        if (message.type === 'result') {
+          const resultSubtype = (message as { subtype?: string }).subtype;
+          const textResult = 'result' in message ? (message as { result?: string }).result : null;
+
+          if (resultSubtype?.startsWith('error')) {
+            hadError = true;
+            writeOutput({
+              status: 'error',
+              result: null,
+              error: textResult || 'Session command failed.',
+              newSessionId: slashSessionId,
+            });
+          } else {
+            writeOutput({
+              status: 'success',
+              result: textResult || 'Conversation compacted.',
+              newSessionId: slashSessionId,
+            });
+          }
+          resultEmitted = true;
+        }
+      }
+    } catch (err) {
+      hadError = true;
+      const errorMsg = getErrorMessage(err);
+      log(`Slash command error: ${errorMsg}`);
+      writeOutput({ status: 'error', result: null, error: errorMsg });
+    }
+
+    log(`Slash command done. compactBoundarySeen=${compactBoundarySeen}, hadError=${hadError}`);
+
+    // Warn if compact_boundary was never observed — compaction may not have occurred
+    if (!hadError && !compactBoundarySeen) {
+      log('WARNING: compact_boundary was not observed. Compaction may not have completed.');
+    }
+
+    // Only emit final session marker if no result was emitted yet and no error occurred
+    if (!resultEmitted && !hadError) {
+      writeOutput({
+        status: 'success',
+        result: compactBoundarySeen
+          ? 'Conversation compacted.'
+          : 'Compaction requested but compact_boundary was not observed.',
+        newSessionId: slashSessionId,
+      });
+    } else if (!hadError) {
+      // Emit session-only marker so host updates session tracking
+      writeOutput({ status: 'success', result: null, newSessionId: slashSessionId });
+    }
+    return;
+  }
+  // --- End slash command handling ---
+
   // Query loop: run query → wait for IPC message → run new query → repeat
   let resumeAt: string | undefined;
   try {
     while (true) {
-      log(`Starting query (session: ${sessionId || 'new'}, resumeAt: ${resumeAt || 'latest'})...`);
+      // Re-scan MCP-Servers/ before each query so additions/removals take effect immediately
+      const externalMcpServers = loadExternalMcpServers();
+      log(`Starting query (session: ${sessionId || 'new'}, resumeAt: ${resumeAt || 'latest'}, externalMcpServers: ${Object.keys(externalMcpServers).join(', ') || 'none'})...`);
 
-      const queryResult = await runQuery(prompt, sessionId, mcpServerPath, containerInput, sdkEnv, resumeAt);
+      const queryResult = await runQuery(prompt, sessionId, mcpServerPath, containerInput, sdkEnv, externalMcpServers, resumeAt);
       if (queryResult.newSessionId) {
         sessionId = queryResult.newSessionId;
       }
@@ -543,7 +759,7 @@ async function main(): Promise<void> {
       prompt = nextMessage;
     }
   } catch (err) {
-    const errorMessage = err instanceof Error ? err.message : String(err);
+    const errorMessage = getErrorMessage(err);
     log(`Agent error: ${errorMessage}`);
     writeOutput({
       status: 'error',
