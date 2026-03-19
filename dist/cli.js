@@ -62,19 +62,50 @@ function checkBinary(cmd) {
     }
 }
 function detectSandbox() {
-    if (checkBinary('docker info'))
+    if (checkBinary('docker info --format "{{.ID}}"'))
         return 'docker';
     if (checkBinary('container --version'))
         return 'apple';
     return null;
+}
+// ─── Container image ─────────────────────────────────────────────────────────
+function containerImageExists(sandboxType) {
+    return checkBinary(`${sandboxType === 'apple' ? 'container' : 'docker'} image inspect nanoclaw-agent:latest`);
+}
+function buildContainerImage(sandboxType) {
+    const buildScript = resolve(process.cwd(), 'container', 'build.sh');
+    if (!existsSync(buildScript)) {
+        console.warn('container/build.sh not found — skipping container build.');
+        return;
+    }
+    console.log('Building container image nanoclaw-agent:latest (this may take a few minutes)…');
+    const r = spawnSync('bash', [buildScript], {
+        stdio: 'inherit',
+        cwd: resolve(process.cwd(), 'container'),
+        env: {
+            ...process.env,
+            CONTAINER_RUNTIME: sandboxType === 'apple' ? 'container' : 'docker',
+        },
+    });
+    if (r.status !== 0) {
+        console.warn(`Container build exited with code ${r.status}.`);
+    }
 }
 // ─── First-time setup ────────────────────────────────────────────────────────
 function runFirstTimeSetup(sandboxType) {
     // setup/ scripts are run via tsx (they use .ts imports and are not compiled by tsc)
     const distDir = dirname(fileURLToPath(import.meta.url)); // dist/
     const setupIndex = resolve(distDir, '../setup/index.ts');
-    const tsxBin = resolve(distDir, '../node_modules/.bin/tsx');
-    const runner = existsSync(tsxBin) ? tsxBin : 'tsx';
+    // tsx may live at different depths depending on whether we're running from a
+    // local install or from the npx cache (where the package is nested inside
+    // another node_modules tree).
+    const tsxCandidates = [
+        resolve(distDir, '../node_modules/.bin/tsx'), // local / direct install
+        resolve(distDir, '../../.bin/tsx'), // npx cache (scoped pkg)
+        resolve(distDir, '../../../.bin/tsx'), // npx cache (nested)
+    ];
+    const tsxBin = tsxCandidates.find((p) => existsSync(p));
+    const runner = tsxBin ?? 'tsx';
     if (!existsSync(setupIndex)) {
         console.warn('Setup scripts not found — skipping first-time setup.');
         return;
@@ -177,7 +208,7 @@ async function cli() {
     }
     // --- Check sandbox availability --------------------------------------------
     if (sandboxType === 'docker') {
-        if (!checkBinary('docker info')) {
+        if (!checkBinary('docker info --format "{{.ID}}"')) {
             die('Docker is not running.\n' +
                 '  Please start Docker Desktop or the Docker Engine daemon.');
         }
@@ -192,6 +223,10 @@ async function cli() {
     // --- First-run detection ---------------------------------------------------
     if (!existsSync(resolve(process.cwd(), 'store', 'messages.db'))) {
         runFirstTimeSetup(sandboxType);
+    }
+    // --- Ensure container image exists ----------------------------------------
+    if (!containerImageExists(sandboxType)) {
+        buildContainerImage(sandboxType);
     }
     // --- Apply settings to process.env so downstream modules pick them up ------
     // web.ts reads NANOCLAW_HOST / NANOCLAW_PORT / NANOCLAW_TOKEN;

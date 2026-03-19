@@ -630,6 +630,34 @@ function ensureContainerSystemRunning(): void {
   cleanupOrphans();
 }
 
+const MAIN_CLAUDE_MD = `# NanoClaw
+
+Personal Claude assistant. You help with tasks, answer questions, and can schedule activities.
+
+## What You Can Do
+
+- answer questions and have conversations
+- search the web and fetch content from URLs
+- read and write files in your workspace
+- run bash commands in your sandbox
+- schedule tasks to run later or on a recurring basis
+- send messages back to the chat
+
+## Memory
+
+The \`conversations/\` folder contains searchable history of past conversations. Use this to recall
+context from previous sessions.
+
+When you learn something important, create files for structured data (e.g. \`preferences.md\`) and
+keep an index in your memory for the files you create.
+`;
+
+const GLOBAL_CLAUDE_MD = `# Shared Memory
+
+This directory is mounted read-only in all groups. Use it for information that should be
+accessible across all sessions.
+`;
+
 /** Export for use by cli.ts entry point. */
 function initWorkspace(): void {
   const dirs = [
@@ -646,6 +674,16 @@ function initWorkspace(): void {
   ];
   for (const dir of dirs) {
     fs.mkdirSync(dir, { recursive: true });
+  }
+
+  const mainClaudeMd = path.join(GROUPS_DIR, 'main', 'CLAUDE.md');
+  if (!fs.existsSync(mainClaudeMd)) {
+    fs.writeFileSync(mainClaudeMd, MAIN_CLAUDE_MD, 'utf-8');
+  }
+
+  const globalClaudeMd = path.join(GROUPS_DIR, 'global', 'CLAUDE.md');
+  if (!fs.existsSync(globalClaudeMd)) {
+    fs.writeFileSync(globalClaudeMd, GLOBAL_CLAUDE_MD, 'utf-8');
   }
 }
 
