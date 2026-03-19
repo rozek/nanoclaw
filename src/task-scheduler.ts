@@ -21,6 +21,13 @@ import { resolveGroupFolderPath } from './group-folder.js';
 import { logger } from './logger.js';
 import { RegisteredGroup, ScheduledTask } from './types.js';
 
+// Web-channel JID prefix and dedicated cron session JID.
+// Scheduled task output for web sessions is always routed to the cron session
+// so users see it in one dedicated place instead of the originating session.
+const WEB_JID_PREFIX = 'local@web-';
+const WEB_JID_LEGACY = 'local@web'; // Legacy JID used before per-session JIDs were introduced
+const CRON_SESSION_JID = 'local@web-cron';
+
 /**
  * Compute the next run time for a recurring task, anchored to the
  * task's scheduled time rather than Date.now() to prevent cumulative
@@ -162,10 +169,34 @@ async function runTask(
   let result: string | null = null;
   let error: string | null = null;
 
-  // For group context mode, use the group's current session
+  // For web sessions, display output in the dedicated cron session instead of
+  // the originating session, so all scheduled-task output is in one place.
+  // Also handle legacy JID 'local@web' (without suffix) used before per-session JIDs.
+  const displayJid =
+    task.chat_jid === WEB_JID_LEGACY || task.chat_jid.startsWith(WEB_JID_PREFIX)
+      ? CRON_SESSION_JID
+      : task.chat_jid;
+
+  // For group context mode, look up the session by chatJid first (per-session key),
+  // then fall back to group_folder (backward compatibility).
   const sessions = deps.getSessions();
   const sessionId =
-    task.context_mode === 'group' ? sessions[task.group_folder] : undefined;
+    task.context_mode === 'group'
+      ? (sessions[task.chat_jid] ?? sessions[task.group_folder])
+      : undefined;
+
+  // Each task gets its own queue JID so it runs in parallel with user messages
+  // and with other tasks, without blocking the user's message queue slot.
+  const taskQueueJid = `task:${task.id}`;
+
+  // Send a header to the cron session so the user knows which task is running.
+  const promptPreview = task.prompt.split('\n')[0].slice(0, 80);
+  const scheduleLabel =
+    task.schedule_type === 'interval'
+      ? `every ${Math.round(parseInt(task.schedule_value, 10) / 60000)} min`
+      : task.schedule_value;
+  const taskHeader = `---\n**Task #${task.id}** | ${scheduleLabel}\n> ${promptPreview}`;
+  await deps.sendMessage(displayJid, taskHeader);
 
   // After the task produces a result, close the container promptly.
   // Tasks are single-turn — no need to wait IDLE_TIMEOUT (30 min) for the
@@ -177,7 +208,7 @@ async function runTask(
     if (closeTimer) return; // already scheduled
     closeTimer = setTimeout(() => {
       logger.debug({ taskId: task.id }, 'Closing task container after result');
-      deps.queue.closeStdin(task.chat_jid);
+      deps.queue.closeStdin(taskQueueJid);
     }, TASK_CLOSE_DELAY_MS);
   };
 
@@ -194,16 +225,16 @@ async function runTask(
         assistantName: ASSISTANT_NAME,
       },
       (proc, containerName) =>
-        deps.onProcess(task.chat_jid, proc, containerName, group.folder),
+        deps.onProcess(taskQueueJid, proc, containerName, group.folder),
       async (streamedOutput: ContainerOutput) => {
         if (streamedOutput.result) {
           result = streamedOutput.result;
-          // Forward result to user (sendMessage handles formatting)
-          await deps.sendMessage(task.chat_jid, streamedOutput.result);
+          // Forward result to the display JID (cron session for web tasks)
+          await deps.sendMessage(displayJid, streamedOutput.result);
           scheduleClose();
         }
         if (streamedOutput.status === 'success') {
-          deps.queue.notifyIdle(task.chat_jid);
+          deps.queue.notifyIdle(taskQueueJid);
           scheduleClose(); // Close promptly even when result is null (e.g. IPC-only tasks)
         }
         if (streamedOutput.status === 'error') {
@@ -275,7 +306,9 @@ export function startSchedulerLoop(deps: SchedulerDependencies): void {
           continue;
         }
 
-        deps.queue.enqueueTask(currentTask.chat_jid, currentTask.id, () =>
+        // Use a task-specific queue JID so the task runs in parallel with
+        // user messages and other tasks (not serialized on the group's slot).
+        deps.queue.enqueueTask(`task:${currentTask.id}`, currentTask.id, () =>
           runTask(currentTask, deps),
         );
       }

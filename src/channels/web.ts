@@ -637,7 +637,10 @@ const HTML = `<!DOCTYPE html>
     }
 
     cancelBtn.addEventListener('click', () => {
-      fetch('/cancel?sid=' + sessionId, { method: 'POST' }).catch(() => {});
+      cancelBtn.disabled = true;
+      fetch('/cancel?sid=' + sessionId, { method: 'POST' })
+        .catch(() => {})
+        .finally(() => { cancelBtn.disabled = false; });
     });
 
     /** Show/update/clear the live tool-use status line below the typing indicator. */
@@ -834,7 +837,7 @@ const HTML = `<!DOCTYPE html>
       const href = a.getAttribute('href') || '';
       if (href.startsWith('topic:')) {
         e.preventDefault();
-        inputEl.value = 'switching to topic: ' + href.slice('topic:'.length);
+        inputEl.value = 'switching to folder: ' + href.slice('topic:'.length);
         sendMsg();
       }
     });
@@ -1196,9 +1199,9 @@ const HTML = `<!DOCTYPE html>
       addMsg(text, 'user', userMsgId);
       sendBtn.disabled = true;
       try {
-        const cwdMatch = text.match(/^switching to topic:\\s*(.+)$/i);
+        const cwdMatch = text.match(/^switching to folder:\\s*(.+)$/i);
         if (cwdMatch) {
-          const cwd = 'Topics/' + cwdMatch[1].trim();
+          const cwd = cwdMatch[1].trim();
           saveCwd(sessionId, cwd);
           sessionStorage.setItem('currentCwd', cwd);
           updateHeader(cwd);
@@ -1614,9 +1617,51 @@ class WebChannel {
               this.ensureSession(sessionId);
               const jid = WEB_JID_PREFIX + sessionId;
 
-              const cwdMatch = content.match(/^switching to topic:\s*(.+)$/i);
+              // /cwd <path> shorthand: same effect as "switching to folder: <path>"
+              const cwdCmdMatch = content.match(/^\/cwd(?:\s+(.*))?$/i);
+              if (cwdCmdMatch) {
+                const cwd = (cwdCmdMatch[1] || '').trim();
+                setCwd(sessionId, cwd);
+                broadcastToSession(sessionId, 'cwd', JSON.stringify(cwd));
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end('{"ok":true}');
+                return;
+              }
+
+              // /pwd: reply immediately with the current CWD, no agent needed
+              if (/^\/pwd\s*$/i.test(content)) {
+                const cwd = sessionCwds.get(sessionId) ?? '';
+                const reply = cwd
+                  ? `Current working folder: \`${cwd}\``
+                  : 'Working folder: workspace root';
+                const botTs = new Date().toISOString();
+                const botMsgId = `web-bot-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+                const botMsg: NewMessage = {
+                  id: botMsgId,
+                  chat_jid: jid,
+                  sender: 'bot',
+                  sender_name: 'NanoClaw',
+                  content: reply,
+                  timestamp: botTs,
+                  is_from_me: true,
+                  is_bot_message: true,
+                };
+                try {
+                  storeMessage(botMsg);
+                } catch {}
+                broadcastToSession(
+                  sessionId,
+                  'message',
+                  JSON.stringify({ text: reply, id: botMsgId }),
+                );
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end('{"ok":true}');
+                return;
+              }
+
+              const cwdMatch = content.match(/^switching to folder:\s*(.+)$/i);
               if (cwdMatch) {
-                const cwd = 'Topics/' + cwdMatch[1].trim();
+                const cwd = cwdMatch[1].trim();
                 setCwd(sessionId, cwd);
                 broadcastToSession(sessionId, 'cwd', JSON.stringify(cwd));
               }
@@ -1681,6 +1726,14 @@ class WebChannel {
             res.end('Bad request');
           }
         });
+        return;
+      }
+
+      if (req.method === 'GET' && req.url?.split('?')[0] === '/pwd') {
+        const sid = sidFromUrl(req.url);
+        const cwd = sessionCwds.get(sid) ?? '';
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ cwd }));
         return;
       }
 
@@ -1777,9 +1830,9 @@ class WebChannel {
 
   async sendMessage(jid: string, text: string): Promise<void> {
     const sessionId = sessionIdFromJid(jid);
-    const topicMatch = text.match(/^switching to topic:\s*(\S+)/im);
+    const topicMatch = text.match(/^switching to folder:\s*(.+)$/im);
     if (topicMatch) {
-      const cwd = 'Topics/' + topicMatch[1].trim();
+      const cwd = topicMatch[1].trim();
       setCwd(sessionId, cwd);
       broadcastToSession(sessionId, 'cwd', JSON.stringify(cwd));
     }

@@ -90,6 +90,8 @@ export interface Channel {
   setTyping?(jid: string, isTyping: boolean): Promise<void>;
   // Optional: sync group/chat names from the platform.
   syncGroups?(force: boolean): Promise<void>;
+  // Optional: live tool-use status. Call with null to clear the status display.
+  setStatus?(jid: string, tool: string | null, inputSnippet?: string): void;
 }
 
 // Callback type that channels use to deliver inbound messages

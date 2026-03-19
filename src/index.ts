@@ -57,6 +57,11 @@ import {
   loadSenderAllowlist,
   shouldDropMessage,
 } from './sender-allowlist.js';
+import {
+  extractSessionCommand,
+  handleSessionCommand,
+  isSessionCommandAllowed,
+} from './session-commands.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
@@ -210,6 +215,41 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   if (missedMessages.length === 0) return true;
 
+  // --- Session command interception (before trigger check) ---
+  const cmdResult = await handleSessionCommand({
+    missedMessages,
+    isMainGroup,
+    groupName: group.name,
+    triggerPattern: TRIGGER_PATTERN,
+    timezone: TIMEZONE,
+    deps: {
+      sendMessage: (text) => channel.sendMessage(chatJid, text),
+      setTyping: (typing) =>
+        channel.setTyping?.(chatJid, typing) ?? Promise.resolve(),
+      runAgent: (prompt, onOutput) =>
+        runAgent(group, prompt, chatJid, onOutput),
+      closeStdin: () => queue.closeStdin(chatJid),
+      advanceCursor: (ts) => {
+        lastAgentTimestamp[chatJid] = ts;
+        saveState();
+      },
+      formatMessages,
+      canSenderInteract: (msg) => {
+        const hasTrigger = TRIGGER_PATTERN.test(msg.content.trim());
+        const reqTrigger = !isMainGroup && group.requiresTrigger !== false;
+        return (
+          isMainGroup ||
+          !reqTrigger ||
+          (hasTrigger &&
+            (msg.is_from_me ||
+              isTriggerAllowed(chatJid, msg.sender, loadSenderAllowlist())))
+        );
+      },
+    },
+  });
+  if (cmdResult.handled) return cmdResult.success;
+  // --- End session command interception ---
+
   // For non-main groups, check if trigger is required and present
   if (!isMainGroup && group.requiresTrigger !== false) {
     const allowlistCfg = loadSenderAllowlist();
@@ -253,52 +293,77 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   let hadError = false;
   let outputSentToUser = false;
 
-  const output = await runAgent(group, prompt, chatJid, async (result) => {
-    // Streaming output callback — called for each agent result
-    if (result.result) {
-      const raw =
-        typeof result.result === 'string'
-          ? result.result
-          : JSON.stringify(result.result);
-      // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
-      const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
-      logger.info({ group: group.name }, `Agent output: ${raw.slice(0, 200)}`);
-      if (text) {
-        await channel.sendMessage(chatJid, text);
-        outputSentToUser = true;
+  // Status callback: broadcasts live tool-use events to the channel (best-effort)
+  const statusCallback = (tool: string, inputSnippet?: string) => {
+    try {
+      channel.setStatus?.(chatJid, tool, inputSnippet);
+    } catch {
+      /* non-critical */
+    }
+  };
+
+  const output = await runAgent(
+    group,
+    prompt,
+    chatJid,
+    async (result) => {
+      // Streaming output callback — called for each agent result
+      if (result.result) {
+        const raw =
+          typeof result.result === 'string'
+            ? result.result
+            : JSON.stringify(result.result);
+        // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
+        const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
+        logger.info(
+          { group: group.name },
+          `Agent output: ${raw.slice(0, 200)}`,
+        );
+        if (text) {
+          await channel.sendMessage(chatJid, text);
+          outputSentToUser = true;
+        }
+        // Only reset idle timer on actual results, not session-update markers (result: null)
+        resetIdleTimer();
       }
-      // Only reset idle timer on actual results, not session-update markers (result: null)
-      resetIdleTimer();
-    }
 
-    if (result.status === 'success') {
-      queue.notifyIdle(chatJid);
-    }
+      if (result.status === 'success') {
+        queue.notifyIdle(chatJid);
+      }
 
-    if (result.status === 'error') {
-      hadError = true;
-      if (result.error && !outputSentToUser) {
-        const apiError = formatApiError(result.error);
-        if (apiError) {
-          logger.info(
-            { group: group.name, permanent: apiError.permanent },
-            'Anthropic API error detected, notifying user',
-          );
-          try {
-            await channel.sendMessage(chatJid, apiError.message);
-            // For permanent errors (e.g. 401), mark as "output sent" to prevent
-            // cursor rollback and infinite retry. For transient errors (429/529/500),
-            // leave outputSentToUser=false so the cursor rolls back and retries.
-            if (apiError.permanent) {
-              outputSentToUser = true;
+      if (result.status === 'error') {
+        hadError = true;
+        if (result.error && !outputSentToUser) {
+          const apiError = formatApiError(result.error);
+          if (apiError) {
+            logger.info(
+              { group: group.name, permanent: apiError.permanent },
+              'Anthropic API error detected, notifying user',
+            );
+            try {
+              await channel.sendMessage(chatJid, apiError.message);
+              // For permanent errors (e.g. 401), mark as "output sent" to prevent
+              // cursor rollback and infinite retry. For transient errors (429/529/500),
+              // leave outputSentToUser=false so the cursor rolls back and retries.
+              if (apiError.permanent) {
+                outputSentToUser = true;
+              }
+            } catch {
+              /* ignore send failure */
             }
-          } catch {
-            /* ignore send failure */
           }
         }
       }
-    }
-  });
+    },
+    statusCallback,
+  );
+
+  // Clear status display when the agent is done
+  try {
+    channel.setStatus?.(chatJid, null);
+  } catch {
+    /* non-critical */
+  }
 
   await channel.setTyping?.(chatJid, false);
   if (idleTimer) clearTimeout(idleTimer);
@@ -331,9 +396,12 @@ async function runAgent(
   prompt: string,
   chatJid: string,
   onOutput?: (output: ContainerOutput) => Promise<void>,
+  onStatus?: (tool: string, inputSnippet?: string) => void,
 ): Promise<'success' | 'error'> {
   const isMain = group.isMain === true;
-  const sessionId = sessions[group.folder];
+  // Use chatJid as session key so each web session gets its own Claude conversation
+  // context. Fall back to group.folder for backward compatibility with stored sessions.
+  const sessionId = sessions[chatJid] ?? sessions[group.folder];
 
   // Update tasks snapshot for container to read (filtered by group)
   const tasks = getAllTasks();
@@ -364,8 +432,8 @@ async function runAgent(
   const wrappedOnOutput = onOutput
     ? async (output: ContainerOutput) => {
         if (output.newSessionId) {
-          sessions[group.folder] = output.newSessionId;
-          setSession(group.folder, output.newSessionId);
+          sessions[chatJid] = output.newSessionId;
+          setSession(chatJid, output.newSessionId);
         }
         await onOutput(output);
       }
@@ -385,11 +453,12 @@ async function runAgent(
       (proc, containerName) =>
         queue.registerProcess(chatJid, proc, containerName, group.folder),
       wrappedOnOutput,
+      onStatus,
     );
 
     if (output.newSessionId) {
-      sessions[group.folder] = output.newSessionId;
-      setSession(group.folder, output.newSessionId);
+      sessions[chatJid] = output.newSessionId;
+      setSession(chatJid, output.newSessionId);
     }
 
     if (output.status === 'error') {
@@ -454,6 +523,33 @@ async function startMessageLoop(): Promise<void> {
           }
 
           const isMainGroup = group.isMain === true;
+
+          // --- Session command interception (message loop) ---
+          // Scan ALL messages in the batch for a session command.
+          const loopCmdMsg = groupMessages.find(
+            (m) => extractSessionCommand(m.content, TRIGGER_PATTERN) !== null,
+          );
+
+          if (loopCmdMsg) {
+            // Only close active container if the sender is authorized — otherwise an
+            // untrusted user could kill in-flight work by sending /compact (DoS).
+            // closeStdin no-ops internally when no container is active.
+            if (
+              isSessionCommandAllowed(
+                isMainGroup,
+                loopCmdMsg.is_from_me === true,
+              )
+            ) {
+              queue.closeStdin(chatJid);
+            }
+            // Enqueue so processGroupMessages handles auth + cursor advancement.
+            // Don't pipe via IPC — slash commands need a fresh container with
+            // string prompt (not MessageStream) for SDK recognition.
+            queue.enqueueMessageCheck(chatJid);
+            continue;
+          }
+          // --- End session command interception ---
+
           const needsTrigger = !isMainGroup && group.requiresTrigger !== false;
 
           // For non-main groups, only act on trigger messages.
@@ -531,6 +627,7 @@ function ensureContainerSystemRunning(): void {
   cleanupOrphans();
 }
 
+/** Export for use by cli.ts entry point. */
 export async function main(): Promise<void> {
   ensureContainerSystemRunning();
   initDatabase();
@@ -635,6 +732,10 @@ export async function main(): Promise<void> {
       isGroup?: boolean,
     ) => storeChatMetadata(chatJid, timestamp, name, channel, isGroup),
     registeredGroups: () => registeredGroups,
+    onCancelRequest: (jid: string) => {
+      logger.info({ jid }, 'Cancel request received, killing container');
+      queue.cancelContainer(jid);
+    },
   };
 
   // Create and connect all registered channels.

@@ -193,6 +193,20 @@ export class GroupQueue {
     }
   }
 
+  /**
+   * Forcefully cancel the active container for a group.
+   * Writes the close sentinel (graceful) and immediately kills the spawned
+   * container process so the current SDK query is aborted right away.
+   */
+  cancelContainer(groupJid: string): void {
+    this.closeStdin(groupJid); // graceful signal first
+    const state = this.getGroup(groupJid);
+    if (state.process && !state.process.killed) {
+      logger.info({ groupJid }, 'Killing container process for cancel request');
+      state.process.kill('SIGTERM');
+    }
+  }
+
   private async runForGroup(
     groupJid: string,
     reason: 'messages' | 'drain',
