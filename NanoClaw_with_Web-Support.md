@@ -167,7 +167,7 @@ npx @rozek/nanoclaw --port 8080 --workspace ~/my-workspace --token mySecretToken
 
 ```
 Options:
-  --host <address>      Bind address for the web channel  (default: 127.0.0.1)
+  --host <address>      Bind address for the web channel   (default: 127.0.0.1)
   --port <number>       Port for the web channel           (default: 3099)
   --workspace <path>    Workspace directory                (default: current directory)
   --key <api-key>       Anthropic API key
@@ -307,7 +307,8 @@ The following files were added or changed relative to [qwibitai/nanoclaw](https:
 
 | File | What changed |
 |------|-------------|
-| `package.json` | Added `"bin": {"nanoclaw": "dist/cli.js"}` so the package works as an `npx` command |
+| `package.json` | Added `"bin": {"nanoclaw": "dist/cli.js"}` so the package works as an `npx` command; `setup/` must be included in the TypeScript compilation (`tsconfig.json`) so `dist/setup/index.js` is available at runtime |
+| `src/cli.ts` | Added `runFirstTimeSetup()`: detects first run by checking for `store/messages.db`; if missing, automatically runs the setup steps `environment`, `container`, `mounts --empty`, and `verify` before starting NanoClaw — makes `npx @rozek/nanoclaw` self-configuring on first launch |
 | `src/channels/index.ts` | Exports the new web channel |
 | `src/channels/registry.ts` | Adds `registerGroup` and `onCancelRequest` to `ChannelOpts` so channels can register groups and handle cancel requests |
 | `src/index.ts` | Integrates the web channel and session commands into the orchestrator's main loop; exports `main()` for use by `cli.ts`; adds `formatApiError()` to display Anthropic API errors (401/429/529/500) as user-facing chat messages; uses per-session chat IDs as Claude session keys; adds `statusCallback` to forward live tool-use events to the channel; adds `initWorkspace()` which runs at startup and creates all required workspace directories (`store/`, `groups/main/`, `groups/global/`, `data/ipc/`, `data/sessions/`, `groups/main/Tools/`, `groups/main/Skills/`, `groups/main/MCP-Servers/`, `groups/main/conversations/`) if they don't exist yet |

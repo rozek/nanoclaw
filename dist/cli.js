@@ -8,9 +8,10 @@
  *
  * Parses arguments, validates them (fail-fast), then starts NanoClaw.
  */
-import { execSync } from 'child_process';
+import { execSync, spawnSync } from 'child_process';
 import { existsSync } from 'fs';
-import { resolve } from 'path';
+import { dirname, resolve } from 'path';
+import { fileURLToPath } from 'url';
 import { parseArgs } from 'util';
 // ─── Help text ───────────────────────────────────────────────────────────────
 const HELP = `
@@ -66,6 +67,37 @@ function detectSandbox() {
     if (checkBinary('container --version'))
         return 'apple';
     return null;
+}
+// ─── First-time setup ────────────────────────────────────────────────────────
+function runFirstTimeSetup(sandboxType) {
+    // setup/ scripts are run via tsx (they use .ts imports and are not compiled by tsc)
+    const distDir = dirname(fileURLToPath(import.meta.url)); // dist/
+    const setupIndex = resolve(distDir, '../setup/index.ts');
+    const tsxBin = resolve(distDir, '../node_modules/.bin/tsx');
+    const runner = existsSync(tsxBin) ? tsxBin : 'tsx';
+    if (!existsSync(setupIndex)) {
+        console.warn('Setup scripts not found — skipping first-time setup.');
+        return;
+    }
+    console.log('\n┌─────────────────────────────────────────────┐');
+    console.log('│  NanoClaw — First-Time Setup                │');
+    console.log('└─────────────────────────────────────────────┘\n');
+    const step = (name, extraArgs = []) => {
+        const bar = '─'.repeat(Math.max(0, 38 - name.length));
+        console.log(`\n── ${name} ${bar}`);
+        const r = spawnSync(runner, [setupIndex, '--step', name, ...extraArgs], {
+            stdio: 'inherit',
+            cwd: process.cwd(),
+        });
+        if (r.status !== 0) {
+            console.warn(`Setup step "${name}" exited with code ${r.status}.`);
+        }
+    };
+    step('environment');
+    step('container', ['--runtime', sandboxType]);
+    step('mounts', ['--empty']);
+    step('verify');
+    console.log('\nSetup complete. Starting NanoClaw…\n');
 }
 // ─── Main ────────────────────────────────────────────────────────────────────
 async function cli() {
@@ -156,6 +188,10 @@ async function cli() {
             die('Apple Container Runtime not available.\n' +
                 '  Requires macOS Sequoia 15 or later.');
         }
+    }
+    // --- First-run detection ---------------------------------------------------
+    if (!existsSync(resolve(process.cwd(), 'store', 'messages.db'))) {
+        runFirstTimeSetup(sandboxType);
     }
     // --- Apply settings to process.env so downstream modules pick them up ------
     // web.ts reads NANOCLAW_HOST / NANOCLAW_PORT / NANOCLAW_TOKEN;
