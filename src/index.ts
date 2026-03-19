@@ -756,6 +756,7 @@ export async function main(): Promise<void> {
 
   // Channel callbacks (shared by all channels)
   const channelOpts = {
+    registerGroup,
     onMessage: (chatJid: string, msg: NewMessage) => {
       // Remote control commands — intercept before storage
       const trimmed = msg.content.trim();
