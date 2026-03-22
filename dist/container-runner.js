@@ -392,7 +392,16 @@ export async function runContainerAgent(group, input, onProcess, onOutput, onSta
             ];
             const isError = code !== 0;
             if (isVerbose || isError) {
-                logLines.push(`=== Input ===`, JSON.stringify(input, null, 2), ``, `=== Container Args ===`, containerArgs.join(' '), ``, `=== Mounts ===`, mounts
+                // On error, log input metadata only — not the full prompt.
+                // Full input is only included at verbose level to avoid
+                // persisting user conversation content on every non-zero exit.
+                if (isVerbose) {
+                    logLines.push(`=== Input ===`, JSON.stringify(input, null, 2), ``);
+                }
+                else {
+                    logLines.push(`=== Input Summary ===`, `Prompt length: ${input.prompt.length} chars`, `Session ID: ${input.sessionId || 'new'}`, ``);
+                }
+                logLines.push(`=== Container Args ===`, containerArgs.join(' '), ``, `=== Mounts ===`, mounts
                     .map((m) => `${m.hostPath} -> ${m.containerPath}${m.readonly ? ' (ro)' : ''}`)
                     .join('\n'), ``, `=== Stderr${stderrTruncated ? ' (TRUNCATED)' : ''} ===`, stderr, ``, `=== Stdout${stdoutTruncated ? ' (TRUNCATED)' : ''} ===`, stdout);
             }
@@ -497,7 +506,7 @@ export function writeTasksSnapshot(groupFolder, isMain, tasks) {
  * Only main group can see all available groups (for activation).
  * Non-main groups only see their own registration status.
  */
-export function writeGroupsSnapshot(groupFolder, isMain, groups, registeredJids) {
+export function writeGroupsSnapshot(groupFolder, isMain, groups, _registeredJids) {
     const groupIpcDir = resolveGroupIpcPath(groupFolder);
     fs.mkdirSync(groupIpcDir, { recursive: true });
     // Main sees all groups; others see nothing (they can't activate groups)

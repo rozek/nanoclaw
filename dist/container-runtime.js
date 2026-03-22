@@ -48,7 +48,7 @@ export function readonlyMountArgs(hostPath, containerPath) {
 }
 /** Returns the shell command to stop a container by name. */
 export function stopContainer(name) {
-    return `${CONTAINER_RUNTIME_BIN} stop ${name}`;
+    return `${CONTAINER_RUNTIME_BIN} stop -t 1 ${name}`;
 }
 /** Ensure the container runtime is running, starting it if needed. */
 export function ensureContainerRuntimeRunning() {
@@ -69,7 +69,9 @@ export function ensureContainerRuntimeRunning() {
         console.error('║  2. Run: docker info                                           ║');
         console.error('║  3. Restart NanoClaw                                           ║');
         console.error('╚════════════════════════════════════════════════════════════════╝\n');
-        throw new Error('Container runtime is required but failed to start');
+        throw new Error('Container runtime is required but failed to start', {
+            cause: err,
+        });
     }
 }
 /** Kill orphaned NanoClaw containers from previous runs. */

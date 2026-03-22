@@ -27,7 +27,7 @@ describe('readonlyMountArgs', () => {
 });
 describe('stopContainer', () => {
     it('returns stop command using CONTAINER_RUNTIME_BIN', () => {
-        expect(stopContainer('nanoclaw-test-123')).toBe(`${CONTAINER_RUNTIME_BIN} stop nanoclaw-test-123`);
+        expect(stopContainer('nanoclaw-test-123')).toBe(`${CONTAINER_RUNTIME_BIN} stop -t 1 nanoclaw-test-123`);
     });
 });
 // --- ensureContainerRuntimeRunning ---
@@ -60,8 +60,8 @@ describe('cleanupOrphans', () => {
         cleanupOrphans();
         // ps + 2 stop calls
         expect(mockExecSync).toHaveBeenCalledTimes(3);
-        expect(mockExecSync).toHaveBeenNthCalledWith(2, `${CONTAINER_RUNTIME_BIN} stop nanoclaw-group1-111`, { stdio: 'pipe' });
-        expect(mockExecSync).toHaveBeenNthCalledWith(3, `${CONTAINER_RUNTIME_BIN} stop nanoclaw-group2-222`, { stdio: 'pipe' });
+        expect(mockExecSync).toHaveBeenNthCalledWith(2, `${CONTAINER_RUNTIME_BIN} stop -t 1 nanoclaw-group1-111`, { stdio: 'pipe' });
+        expect(mockExecSync).toHaveBeenNthCalledWith(3, `${CONTAINER_RUNTIME_BIN} stop -t 1 nanoclaw-group2-222`, { stdio: 'pipe' });
         expect(logger.info).toHaveBeenCalledWith({ count: 2, names: ['nanoclaw-group1-111', 'nanoclaw-group2-222'] }, 'Stopped orphaned containers');
     });
     it('does nothing when no orphans exist', () => {

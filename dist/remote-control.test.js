@@ -24,7 +24,7 @@ describe('remote-control', () => {
     let readFileSyncSpy;
     let writeFileSyncSpy;
     let unlinkSyncSpy;
-    let mkdirSyncSpy;
+    let _mkdirSyncSpy;
     let openSyncSpy;
     let closeSyncSpy;
     // Track what readFileSync should return for the stdout file
@@ -34,7 +34,7 @@ describe('remote-control', () => {
         spawnMock.mockReset();
         stdoutFileContent = '';
         // Default fs mocks
-        mkdirSyncSpy = vi
+        _mkdirSyncSpy = vi
             .spyOn(fs, 'mkdirSync')
             .mockImplementation(() => undefined);
         writeFileSyncSpy = vi

@@ -40,5 +40,5 @@ export interface AvailableGroup {
  * Only main group can see all available groups (for activation).
  * Non-main groups only see their own registration status.
  */
-export declare function writeGroupsSnapshot(groupFolder: string, isMain: boolean, groups: AvailableGroup[], registeredJids: Set<string>): void;
+export declare function writeGroupsSnapshot(groupFolder: string, isMain: boolean, groups: AvailableGroup[], _registeredJids: Set<string>): void;
 //# sourceMappingURL=container-runner.d.ts.map
