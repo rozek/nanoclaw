@@ -206,6 +206,17 @@ function broadcastToSession(
   }
 }
 
+function broadcastAll(event: string, data: string): void {
+  const payload = `event: ${event}\ndata: ${data}\n\n`;
+  for (const clients of sseClients.values()) {
+    for (const client of clients) {
+      try {
+        client.write(payload);
+      } catch {}
+    }
+  }
+}
+
 function sessionIdFromJid(jid: string): string {
   return jid.startsWith(WEB_JID_PREFIX)
     ? jid.slice(WEB_JID_PREFIX.length)
@@ -666,14 +677,16 @@ const HTML = `<!DOCTYPE html>
         d.appendChild(copyBtn);
       } else {
         d.textContent = text;
-        const copyBtn = document.createElement('button');
-        copyBtn.className = 'copy-btn';
-        copyBtn.innerHTML = ICON_COPY;
-        copyBtn.title = 'Nachricht kopieren';
-        copyBtn.addEventListener('click', () => {
-          navigator.clipboard.writeText(text).then(() => flashCopied(copyBtn)).catch(() => {});
-        });
-        d.appendChild(copyBtn);
+        if (cls === 'user') {
+          const copyBtn = document.createElement('button');
+          copyBtn.className = 'copy-btn';
+          copyBtn.innerHTML = ICON_COPY;
+          copyBtn.title = 'Nachricht kopieren';
+          copyBtn.addEventListener('click', () => {
+            navigator.clipboard.writeText(text).then(() => flashCopied(copyBtn)).catch(() => {});
+          });
+          d.appendChild(copyBtn);
+        }
       }
       // Trash button — inside the bubble, top corner, always visible; only for real messages with a DB id
       row.appendChild(d);
@@ -1038,6 +1051,10 @@ const HTML = `<!DOCTYPE html>
           addMsg(text, 'user', msgId);
         } catch { /* ignore malformed user_message event */ }
       });
+      es.addEventListener('sessions_changed', () => {
+        if (sseGeneration !== myGen) return;
+        mergeServerSessions();
+      });
       es.addEventListener('delete_message', e => {
         if (sseGeneration !== myGen || sessionId !== mySid) return;
         try {
@@ -1320,10 +1337,8 @@ const HTML = `<!DOCTYPE html>
         if (!isRenaming()) renderSessions();
       }
     });
-    // Fast polling for same-browser cross-tab sync (fallback)
-    setInterval(checkAndSyncSessions, 1000);
-    // Server polling: picks up sessions from other browsers/devices
-    setInterval(mergeServerSessions, 5000);
+    // Server polling: long-interval fallback only — session mutations are now broadcast via SSE sessions_changed
+    setInterval(mergeServerSessions, 60000);
     // Stale-connection detector: Android may freeze SSE without triggering 'error'.
     // If no ping was received in >35 s while the connection appears connected, force reconnect.
     setInterval(() => {
@@ -1443,6 +1458,10 @@ class WebChannel {
   private ensureSession(sessionId: string): void {
     if (registeredSessions.has(sessionId)) return;
     registeredSessions.add(sessionId);
+    // Notify other clients that a new session appeared (skip cron — registered at startup)
+    if (sessionId !== CRON_SESSION_ID) {
+      broadcastAll('sessions_changed', JSON.stringify({ added: sessionId }));
+    }
     const jid = WEB_JID_PREFIX + sessionId;
     // Preserve custom name if already set (e.g. by /session-name endpoint)
     const existing = getAllChats().find((c) => c.jid === jid);
@@ -1631,6 +1650,10 @@ class WebChannel {
                     ? nameUpdatedAt
                     : Date.now();
                 updateChatName(WEB_JID_PREFIX + sid, safeName, ts);
+                broadcastAll(
+                  'sessions_changed',
+                  JSON.stringify({ renamed: sid }),
+                );
               }
             }
             res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -1649,6 +1672,11 @@ class WebChannel {
           try {
             const { sid } = JSON.parse(body);
             if (sid && typeof sid === 'string') {
+              // Notify all clients before removing their SSE connections
+              broadcastAll(
+                'sessions_changed',
+                JSON.stringify({ deleted: sid }),
+              );
               deleteChat(WEB_JID_PREFIX + sid);
               registeredSessions.delete(sid);
               sseClients.delete(sid);
@@ -2035,6 +2063,15 @@ class WebChannel {
         }
       }
     }, 20000);
+
+    // Pre-load CWDs from DB so /upload and /pwd work correctly before first SSE connect
+    try {
+      for (const c of getAllChats()) {
+        if (c.jid.startsWith(WEB_JID_PREFIX) && c.cwd) {
+          sessionCwds.set(c.jid.slice(WEB_JID_PREFIX.length), c.cwd);
+        }
+      }
+    } catch {}
 
     // Ensure dedicated cron session exists (low timestamp so user renames always win)
     try {
