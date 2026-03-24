@@ -230,7 +230,7 @@ const HTML = `<!DOCTYPE html>
     #sidebar { width: var(--sidebar-width, 220px); min-width: var(--sidebar-width, 220px); background: #fff; border-right: 1px solid #e0e0e0; display: flex; flex-direction: column; transition: width 0.2s, min-width 0.2s; overflow: hidden; }
     #sidebar.collapsed { width: 0 !important; min-width: 0 !important; border-right: none; }
     #sidebar.dragging { transition: none; }
-    #sidebar-header { padding: 10px 8px 10px 12px; border-bottom: 1px solid #e0e0e0; display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+    #sidebar-header { padding: 10px 2px 10px 12px; border-bottom: 1px solid #e0e0e0; display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
     /* Resize grip — sits at right edge of the header, same width as the scrollbar below */
     #sidebar-grip { width: 14px; min-width: 14px; align-self: stretch; cursor: col-resize; flex-shrink: 0; display: flex; align-items: center; justify-content: center; color: #bbb; font-size: 12px; letter-spacing: -2px; user-select: none; border-radius: 3px; transition: color 0.15s, background-color 0.15s; }
     #sidebar-grip:hover, #sidebar-grip.active { color: #2563eb; background-color: rgba(37,99,235,0.08); }
@@ -261,7 +261,7 @@ const HTML = `<!DOCTYPE html>
     .msg-row.user .del-btn { order: -1; }
     .del-btn { flex-shrink: 0; background: none; border: none; cursor: pointer; color: #ccc; padding: 2px 3px; line-height: 1; border-radius: 4px; transition: color 0.15s; margin-top: 7px; }
     .del-btn:hover { color: #ef4444; }
-    .msg { max-width: 75%; padding: 10px 14px; border-radius: 12px; line-height: 1.6; word-break: break-word; font-size: 15px; }
+    .msg { max-width: 75%; padding: 10px 14px; border-radius: 12px; line-height: 1.6; word-break: break-word; font-size: 15px; position: relative; }
     .msg.user { background: #2563eb; color: #fff; border-bottom-right-radius: 4px; white-space: pre-wrap; }
     .msg.bot { background: #ffffff; border: 1px solid #e0e0e0; border-bottom-left-radius: 4px; position: relative; }
     .msg.typing { color: #888; font-style: italic; }
@@ -276,6 +276,9 @@ const HTML = `<!DOCTYPE html>
     .copy-btn { position: absolute; top: 6px; right: 6px; background: none; border: none; border-radius: 4px; padding: 2px 4px; cursor: pointer; color: #bbb; transition: color 0.15s; line-height: 1; }
     .copy-btn:hover { color: #555; }
     .copy-btn.copied { color: #16a34a; }
+    .msg.user .copy-btn { color: rgba(255,255,255,0.4); }
+    .msg.user .copy-btn:hover { color: rgba(255,255,255,0.95); }
+    .msg.user .copy-btn.copied { color: rgba(255,255,255,0.95); }
     .msg.bot code { background: #f0f2f4; padding: 2px 5px; border-radius: 4px; font-size: 0.88em; font-family: monospace; }
     .msg.bot pre code { background: none; padding: 0; font-size: 0.88em; }
     .msg.bot blockquote { border-left: 3px solid #d0d0d0; padding-left: 12px; color: #666; margin: 0.5em 0; }
@@ -630,6 +633,14 @@ const HTML = `<!DOCTYPE html>
         d.appendChild(copyBtn);
       } else {
         d.textContent = text;
+        const copyBtn = document.createElement('button');
+        copyBtn.className = 'copy-btn';
+        copyBtn.innerHTML = ICON_COPY;
+        copyBtn.title = 'Nachricht kopieren';
+        copyBtn.addEventListener('click', () => {
+          navigator.clipboard.writeText(text).then(() => flashCopied(copyBtn)).catch(() => {});
+        });
+        d.appendChild(copyBtn);
       }
       // Trash button — inside the bubble, top corner, always visible; only for real messages with a DB id
       row.appendChild(d);
@@ -725,6 +736,8 @@ const HTML = `<!DOCTYPE html>
         if (sid !== sessionId) return; // session changed while fetching — discard stale result
         const hist = await resp.json();
         if (sid !== sessionId) return; // check again after JSON parse
+        // Capture scroll state before clearing so we can restore it afterwards
+        const distFromBottom = msgsEl.scrollHeight - msgsEl.scrollTop - msgsEl.clientHeight;
         msgsEl.innerHTML = '';
         typingEl = null;
         statusEl = null;
@@ -741,8 +754,12 @@ const HTML = `<!DOCTYPE html>
           if (currentTyping) setTyping(true);
           if (currentStatus) setStatusDisplay(currentStatus.tool, currentStatus.inputSnippet);
         }
-        const saved = loadScroll(sid);
-        msgsEl.scrollTop = saved !== null ? saved : msgsEl.scrollHeight;
+        // Restore scroll: if user was near bottom → go to bottom; otherwise → keep same distance from bottom
+        if (distFromBottom <= 150) {
+          msgsEl.scrollTop = msgsEl.scrollHeight;
+        } else {
+          msgsEl.scrollTop = Math.max(0, msgsEl.scrollHeight - msgsEl.clientHeight - distFromBottom);
+        }
         // Mark this session as read — history was fully loaded, user has "seen" all messages
         markRead(sid);
         // Cache in localStorage for faster access next time
@@ -987,6 +1004,18 @@ const HTML = `<!DOCTYPE html>
           if (msgId && msgsEl.querySelector('[data-msg-id="' + msgId + '"]')) return;
           addMsg(text, 'user', msgId);
         } catch { /* ignore malformed user_message event */ }
+      });
+      es.addEventListener('delete_message', e => {
+        if (sseGeneration !== myGen || sessionId !== mySid) return;
+        try {
+          const { id } = JSON.parse(e.data);
+          const row = msgsEl.querySelector('[data-msg-id="' + id + '"]');
+          if (row) row.remove();
+          try {
+            const hist = loadHistory(sessionId).filter(m => m.id !== id);
+            localStorage.setItem('hist:' + sessionId, JSON.stringify(hist));
+          } catch {}
+        } catch {}
       });
       es.addEventListener('cwd', e => {
         if (sseGeneration !== myGen || sessionId !== mySid) return;
@@ -1603,9 +1632,12 @@ class WebChannel {
             if (req.method === 'POST' && req.url === '/delete-message') {
                 collectBody(req, res, (body) => {
                     try {
-                        const { id } = JSON.parse(body);
+                        const { id, sid } = JSON.parse(body);
                         if (id && typeof id === 'string') {
                             deleteMessage(id);
+                            if (sid && typeof sid === 'string') {
+                                broadcastToSession(sid, 'delete_message', JSON.stringify({ id }));
+                            }
                         }
                         res.writeHead(200, { 'Content-Type': 'application/json' });
                         res.end('{"ok":true}');
@@ -1851,7 +1883,11 @@ class WebChannel {
                     theme_color: '#2563eb',
                     icons: [
                         { src: '/favicon.png', sizes: '192x192', type: 'image/png' },
-                        { src: '/apple-touch-icon.png', sizes: '180x180', type: 'image/png' },
+                        {
+                            src: '/apple-touch-icon.png',
+                            sizes: '180x180',
+                            type: 'image/png',
+                        },
                     ],
                 };
                 res.writeHead(200, {

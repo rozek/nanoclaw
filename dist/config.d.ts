@@ -10,7 +10,7 @@ export declare const DATA_DIR: string;
 export declare const CONTAINER_IMAGE: string;
 export declare const CONTAINER_TIMEOUT: number;
 export declare const CONTAINER_MAX_OUTPUT_SIZE: number;
-export declare const CREDENTIAL_PROXY_PORT: number;
+export declare const ONECLI_URL: string;
 export declare const IPC_POLL_INTERVAL = 1000;
 export declare const IDLE_TIMEOUT: number;
 export declare const MAX_CONCURRENT_CONTAINERS: number;
