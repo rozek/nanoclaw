@@ -236,6 +236,12 @@ const HTML = `<!DOCTYPE html>
   <link rel="icon" type="image/png" href="/favicon.png">
   <link rel="icon" href="/favicon.ico" sizes="any">
   <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#2563eb">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="NanoClaw">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
   <style>
@@ -254,10 +260,15 @@ const HTML = `<!DOCTYPE html>
     #main-area { display: flex; flex: 1; overflow: hidden; }
 
     /* Sidebar */
-    #sidebar { width: 220px; min-width: 220px; background: #fff; border-right: 1px solid #e0e0e0; display: flex; flex-direction: column; transition: width 0.2s, min-width 0.2s; overflow: hidden; }
-    #sidebar.collapsed { width: 0; min-width: 0; }
-    #sidebar-header { padding: 10px 12px; border-bottom: 1px solid #e0e0e0; display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
-    #sidebar-title { font-weight: 600; font-size: 13px; color: #555; text-transform: uppercase; letter-spacing: 0.05em; }
+    #sidebar { width: var(--sidebar-width, 220px); min-width: var(--sidebar-width, 220px); background: #fff; border-right: 1px solid #e0e0e0; display: flex; flex-direction: column; transition: width 0.2s, min-width 0.2s; overflow: hidden; }
+    #sidebar.collapsed { width: 0 !important; min-width: 0 !important; border-right: none; }
+    #sidebar.dragging { transition: none; }
+    #sidebar-header { padding: 10px 2px 10px 12px; border-bottom: 1px solid #e0e0e0; display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+    /* Resize grip — sits at right edge of the header, same width as the scrollbar below */
+    #sidebar-grip { width: 14px; min-width: 14px; align-self: stretch; cursor: col-resize; flex-shrink: 0; display: flex; align-items: center; justify-content: center; color: #bbb; font-size: 12px; letter-spacing: -2px; user-select: none; border-radius: 3px; transition: color 0.15s, background-color 0.15s; }
+    #sidebar-grip:hover, #sidebar-grip.active { color: #2563eb; background-color: rgba(37,99,235,0.08); }
+    @media (max-width: 640px) { #sidebar-grip { display: none; } }
+    #sidebar-title { font-weight: 600; font-size: 13px; color: #555; text-transform: uppercase; letter-spacing: 0.05em; flex: 1; }
     #new-session-btn { background: none; border: 1px solid #d0d0d0; color: #555; width: 24px; height: 24px; border-radius: 4px; cursor: pointer; font-size: 18px; display: flex; align-items: center; justify-content: center; line-height: 1; flex-shrink: 0; }
     #new-session-btn:hover { background: #f0f0f0; border-color: #aaa; }
     #session-list { flex: 1; overflow-y: auto; padding: 6px; display: flex; flex-direction: column; gap: 2px; }
@@ -357,6 +368,7 @@ const HTML = `<!DOCTYPE html>
       <div id="sidebar-header">
         <span id="sidebar-title">Chats</span>
         <button id="new-session-btn" title="Neuen Chat starten">+</button>
+        <div id="sidebar-grip" title="Breite anpassen">⋮⋮</div>
       </div>
       <div id="session-list"></div>
     </div>
@@ -492,7 +504,10 @@ const HTML = `<!DOCTYPE html>
 
     let typingEl        = null;
     let statusEl        = null;   // live tool-use status element (shown below typing indicator)
-    let sessionId       = sessionStorage.getItem('sid');
+    let lastSseActivity = Date.now(); // updated on SSE open + ping; used to detect stale connections
+    // sessionStorage is cleared on Android when a tab is evicted from memory and reloaded.
+    // Fall back to localStorage so the active session survives page reloads on mobile.
+    let sessionId       = sessionStorage.getItem('sid') || localStorage.getItem('lastSid');
     let es              = null;   // EventSource
     let sseGeneration   = 0;      // incremented each setupSSE() call; guards against stale events
     let currentTyping   = false;  // last-known typing state from SSE
@@ -526,9 +541,27 @@ const HTML = `<!DOCTYPE html>
 
     // ── Sidebar toggle ────────────────────────────────────────────────────
     const isMobile = window.innerWidth <= 640;
+    // Touch devices (phones, foldables, tablets): avoid auto-focusing the input after
+    // session switches so the virtual keyboard doesn't pop up unexpectedly.
+    // pointer:coarse is more reliable than maxTouchPoints on Samsung/Android devices.
+    const hasTouchscreen = window.matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0;
+
+    // ── Sidebar width (desktop only) ──────────────────────────────────────
+    const SIDEBAR_DEFAULT = 220;
+    const SIDEBAR_MIN     = 140;
+    const SIDEBAR_MAX     = 520;
+    function applySidebarWidth(w) {
+      sidebar.style.setProperty('--sidebar-width', w + 'px');
+    }
+    if (!isMobile) {
+      const saved = parseInt(localStorage.getItem('sidebarWidth') || '', 10);
+      applySidebarWidth(isNaN(saved) ? SIDEBAR_DEFAULT : saved);
+    }
+
     // On mobile: always open initially (overlay mode); on desktop: respect saved pref
     let sidebarOpen = isMobile ? true : (localStorage.getItem('sidebarOpen') !== 'false');
     const backdrop = document.getElementById('sidebar-backdrop');
+    const sidebarResizeEl = document.getElementById('sidebar-grip');
     function setSidebar(open) {
       sidebarOpen = open;
       // Only persist state on desktop — on mobile sidebar is always an overlay
@@ -541,6 +574,35 @@ const HTML = `<!DOCTYPE html>
     document.getElementById('toggle-sidebar').addEventListener('click', () => setSidebar(!sidebarOpen));
     // Tap backdrop to close sidebar on mobile
     if (backdrop) backdrop.addEventListener('click', () => setSidebar(false));
+
+    // ── Sidebar resize by dragging ────────────────────────────────────────
+    if (sidebarResizeEl && !isMobile) {
+      function startSidebarResize(startX) {
+        const startWidth = sidebar.offsetWidth;
+        sidebar.classList.add('dragging');
+        sidebarResizeEl.classList.add('active');
+        function onMove(e) {
+          const x = e.touches ? e.touches[0].clientX : e.clientX;
+          const w = Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, startWidth + (x - startX)));
+          applySidebarWidth(w);
+        }
+        function onEnd() {
+          sidebar.classList.remove('dragging');
+          sidebarResizeEl.classList.remove('active');
+          localStorage.setItem('sidebarWidth', String(sidebar.offsetWidth));
+          document.removeEventListener('mousemove', onMove);
+          document.removeEventListener('mouseup', onEnd);
+          document.removeEventListener('touchmove', onMove);
+          document.removeEventListener('touchend', onEnd);
+        }
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onEnd);
+        document.addEventListener('touchmove', onMove, { passive: true });
+        document.addEventListener('touchend', onEnd);
+      }
+      sidebarResizeEl.addEventListener('mousedown', e => { e.preventDefault(); startSidebarResize(e.clientX); });
+      sidebarResizeEl.addEventListener('touchstart', e => { startSidebarResize(e.touches[0].clientX); }, { passive: true });
+    }
 
     // ── Header ────────────────────────────────────────────────────────────
     function updateHeader(cwd) {
@@ -562,6 +624,7 @@ const HTML = `<!DOCTYPE html>
     function renderMsg(text, cls, msgId) {
       const row = document.createElement('div');
       row.className = 'msg-row ' + (cls.startsWith('bot') || cls === 'status' ? 'bot' : 'user');
+      if (msgId) row.dataset.msgId = msgId;
       const d = document.createElement('div');
       d.className = 'msg ' + cls;
       if (cls === 'bot') {
@@ -627,7 +690,11 @@ const HTML = `<!DOCTYPE html>
         row.appendChild(delBtn);
       }
       msgsEl.appendChild(row);
-      msgsEl.scrollTop = msgsEl.scrollHeight;
+      // Only auto-scroll when the user is already near the bottom (≤150 px away).
+      // This prevents interrupting the user when they scroll up to read history.
+      if (msgsEl.scrollHeight - msgsEl.scrollTop - msgsEl.clientHeight <= 150) {
+        msgsEl.scrollTop = msgsEl.scrollHeight;
+      }
       return row;
     }
 
@@ -673,7 +740,9 @@ const HTML = `<!DOCTYPE html>
         msgsEl.appendChild(statusEl);
       }
       statusEl.textContent = label;
-      msgsEl.scrollTop = msgsEl.scrollHeight;
+      if (msgsEl.scrollHeight - msgsEl.scrollTop - msgsEl.clientHeight <= 150) {
+        msgsEl.scrollTop = msgsEl.scrollHeight;
+      }
     }
 
     function restoreHistory(sid) {
@@ -689,6 +758,8 @@ const HTML = `<!DOCTYPE html>
         if (sid !== sessionId) return; // session changed while fetching — discard stale result
         const hist = await resp.json();
         if (sid !== sessionId) return; // check again after JSON parse
+        // Capture scroll state before clearing so we can restore it afterwards
+        const distFromBottom = msgsEl.scrollHeight - msgsEl.scrollTop - msgsEl.clientHeight;
         msgsEl.innerHTML = '';
         typingEl = null;
         statusEl = null;
@@ -705,8 +776,12 @@ const HTML = `<!DOCTYPE html>
           if (currentTyping) setTyping(true);
           if (currentStatus) setStatusDisplay(currentStatus.tool, currentStatus.inputSnippet);
         }
-        const saved = loadScroll(sid);
-        msgsEl.scrollTop = saved !== null ? saved : msgsEl.scrollHeight;
+        // Restore scroll: if user was near bottom → go to bottom; otherwise → keep same distance from bottom
+        if (distFromBottom <= 150) {
+          msgsEl.scrollTop = msgsEl.scrollHeight;
+        } else {
+          msgsEl.scrollTop = Math.max(0, msgsEl.scrollHeight - msgsEl.clientHeight - distFromBottom);
+        }
         // Mark this session as read — history was fully loaded, user has "seen" all messages
         markRead(sid);
         // Cache in localStorage for faster access next time
@@ -822,14 +897,15 @@ const HTML = `<!DOCTYPE html>
           const maxOrder = serverOrder.length;
           const prevOrder = local.map(s => s.id).join(',');
           local.sort((a, b) => {
-            // isOwn sessions not yet confirmed in serverOrder stay above all server-ordered sessions
             const rawIa = orderMap.get(a.id);
             const rawIb = orderMap.get(b.id);
-            const ia = rawIa !== undefined ? rawIa : (a.isOwn ? -1 : maxOrder);
-            const ib = rawIb !== undefined ? rawIb : (b.isOwn ? -1 : maxOrder);
-            if (ia !== ib) return ia - ib;
-            // Sessions not in the order list: sort by newest first
-            return (b.createdAt || 0) - (a.createdAt || 0);
+            const inOrderA = rawIa !== undefined;
+            const inOrderB = rawIb !== undefined;
+            // Sessions not in server order (new sessions) always appear at the top, newest first
+            if (!inOrderA && !inOrderB) return (b.createdAt || 0) - (a.createdAt || 0);
+            if (!inOrderA) return -1;
+            if (!inOrderB) return 1;
+            return rawIa - rawIb;
           });
           const newOrder = local.map(s => s.id).join(',');
           if (newOrder !== prevOrder) changed = true;
@@ -869,6 +945,7 @@ const HTML = `<!DOCTYPE html>
         if (sseGeneration !== myGen || sessionId !== mySid) return;
         const wasConnected = sseEverConnected;
         sseEverConnected = true;
+        lastSseActivity = Date.now(); // reset stale-connection timer on (re)connect
         setConnState('connected');
         // Push session name on every connect so ensureSession() on the server (which
         // runs after the SSE handshake and may default to "Web Chat") always sees the
@@ -911,6 +988,10 @@ const HTML = `<!DOCTYPE html>
         } catch { /* render error — don't block markRead */ }
         markRead(sessionId);   // message arrived in active session → keep it read
       });
+      es.addEventListener('ping', () => {
+        if (sseGeneration !== myGen) return;
+        lastSseActivity = Date.now(); // server heartbeat received — connection is alive
+      });
       es.addEventListener('typing', e => {
         if (sseGeneration !== myGen || sessionId !== mySid) return;
         // Ignore stale "typing: true" from the server's initial SSE state push
@@ -918,6 +999,10 @@ const HTML = `<!DOCTYPE html>
         // fetchServerHistory has already confirmed agentDone).
         if (e.data === 'true' && botHasResponded) return;
         setTyping(e.data === 'true');
+        // Fallback: when the agent starts typing it means a user message was just
+        // processed. Fetch history immediately so the message appears even if the
+        // user_message SSE event was missed (e.g. due to Android throttling).
+        if (e.data === 'true') fetchServerHistory(sessionId);
       });
       es.addEventListener('status', e => {
         if (sseGeneration !== myGen || sessionId !== mySid) return;
@@ -928,6 +1013,31 @@ const HTML = `<!DOCTYPE html>
           if (botHasResponded) return;
           setStatusDisplay(payload.tool || null, payload.input || null);
         } catch { /* ignore malformed status event */ }
+      });
+      es.addEventListener('user_message', e => {
+        if (sseGeneration !== myGen || sessionId !== mySid) return;
+        try {
+          const payload = JSON.parse(e.data);
+          const text = typeof payload === 'string' ? payload : payload.text;
+          const msgId = typeof payload === 'object' && payload ? payload.id : null;
+          // Reset so typing/status indicators work for this new exchange on all devices
+          botHasResponded = false;
+          // Skip if this device already rendered the message (sender shows it immediately)
+          if (msgId && msgsEl.querySelector('[data-msg-id="' + msgId + '"]')) return;
+          addMsg(text, 'user', msgId);
+        } catch { /* ignore malformed user_message event */ }
+      });
+      es.addEventListener('delete_message', e => {
+        if (sseGeneration !== myGen || sessionId !== mySid) return;
+        try {
+          const { id } = JSON.parse(e.data);
+          const row = msgsEl.querySelector('[data-msg-id="' + id + '"]');
+          if (row) row.remove();
+          try {
+            const hist = loadHistory(sessionId).filter(m => m.id !== id);
+            localStorage.setItem('hist:' + sessionId, JSON.stringify(hist));
+          } catch {}
+        } catch {}
       });
       es.addEventListener('cwd', e => {
         if (sseGeneration !== myGen || sessionId !== mySid) return;
@@ -952,6 +1062,7 @@ const HTML = `<!DOCTYPE html>
       sessionId = newId;      // set before markRead so renderSessions sees correct active session
       markRead(newId);        // clear unread indicator (uses updated sessionId)
       sessionStorage.setItem('sid', newId);
+      localStorage.setItem('lastSid', newId);
       msgsEl.innerHTML = '';
       typingEl = null;        // reset before setTyping so it doesn't try to .remove() a stale element
       statusEl = null;        // reset before setStatusDisplay for the same reason
@@ -969,7 +1080,7 @@ const HTML = `<!DOCTYPE html>
       updateHeader(cwd);
       setupSSE();
       renderSessions();
-      if (newId !== 'cron') inputEl.focus();
+      if (newId !== 'cron' && !hasTouchscreen) inputEl.focus();
     }
 
     function pushNameToServer(sid, name, nameUpdatedAt) {
@@ -1093,7 +1204,12 @@ const HTML = `<!DOCTYPE html>
         delBtn.className = 'session-btn';
         delBtn.title = 'Löschen';
         delBtn.textContent = '×';
-        delBtn.addEventListener('click', e => { e.stopPropagation(); deleteSession(s.id); });
+        delBtn.addEventListener('click', e => {
+          e.stopPropagation();
+          const label = s.name || sessionLabel(new Date(s.createdAt || Date.now()));
+          if (!confirm('Session "' + label + '" wirklich löschen?')) return;
+          deleteSession(s.id);
+        });
 
         actions.append(renameBtn, delBtn);
         item.append(dot, nameSpan, actions);
@@ -1152,6 +1268,10 @@ const HTML = `<!DOCTYPE html>
     if (!sessionId) {
       sessionId = uuid();
       sessionStorage.setItem('sid', sessionId);
+      localStorage.setItem('lastSid', sessionId);
+    } else {
+      // Ensure sessionStorage is in sync (may have been empty after tab eviction)
+      sessionStorage.setItem('sid', sessionId);
     }
     const isNewSession = ensureSessionInList(sessionId);
     // For new sessions: push name to server immediately.
@@ -1193,6 +1313,23 @@ const HTML = `<!DOCTYPE html>
     setInterval(checkAndSyncSessions, 1000);
     // Server polling: picks up sessions from other browsers/devices
     setInterval(mergeServerSessions, 5000);
+    // Stale-connection detector: Android may freeze SSE without triggering 'error'.
+    // If no ping was received in >35 s while the connection appears connected, force reconnect.
+    setInterval(() => {
+      if (connDot.className === 'connected' && Date.now() - lastSseActivity > 35000) {
+        setupSSE();
+        fetchServerHistory(sessionId);
+      }
+    }, 10000);
+    // On mobile/foldable the browser may freeze or drop the SSE connection while the
+    // tab is in the background (folded, screen off, etc.). When the tab becomes visible
+    // again, immediately re-sync history and reconnect SSE if the connection is gone.
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState !== 'visible') return;
+      fetchServerHistory(sessionId);
+      mergeServerSessions();
+      if (connDot.className === 'disconnected') setupSSE();
+    });
 
     // ── Send message ──────────────────────────────────────────────────────
     async function sendMsg() {
@@ -1536,9 +1673,12 @@ class WebChannel {
       if (req.method === 'POST' && req.url === '/delete-message') {
         collectBody(req, res, (body) => {
           try {
-            const { id } = JSON.parse(body);
+            const { id, sid } = JSON.parse(body);
             if (id && typeof id === 'string') {
               deleteMessage(id);
+              if (sid && typeof sid === 'string') {
+                broadcastToSession(sid, 'delete_message', JSON.stringify({ id }));
+              }
             }
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end('{"ok":true}');
@@ -1708,6 +1848,8 @@ class WebChannel {
               try {
                 storeMessage(msg); // persist to DB for cross-browser history
                 storeChatMetadata(jid, msg.timestamp); // keep chats.last_message_time current for unread detection
+                // Broadcast to all SSE clients so other devices show the message immediately
+                broadcastToSession(sessionId, 'user_message', JSON.stringify({ text: content.trim(), id: msgId }));
               } catch {}
               this.onMessage(jid, msg);
             }
@@ -1796,6 +1938,29 @@ class WebChannel {
         return;
       }
 
+      // GET /manifest.json — Web App Manifest for PWA installability
+      if (req.method === 'GET' && req.url?.split('?')[0] === '/manifest.json') {
+        const manifest = {
+          name: 'NanoClaw',
+          short_name: 'NanoClaw',
+          description: 'NanoClaw — AI Chat',
+          start_url: '/',
+          display: 'standalone',
+          background_color: '#f5f5f5',
+          theme_color: '#2563eb',
+          icons: [
+            { src: '/favicon.png', sizes: '192x192', type: 'image/png' },
+            { src: '/apple-touch-icon.png', sizes: '180x180', type: 'image/png' },
+          ],
+        };
+        res.writeHead(200, {
+          'Content-Type': 'application/manifest+json',
+          'Cache-Control': 'max-age=3600',
+        });
+        res.end(JSON.stringify(manifest));
+        return;
+      }
+
       // Static assets: favicon.ico and apple-touch-icon.png from group folder
       const staticFiles: Record<string, string> = {
         '/favicon.ico': 'image/x-icon',
@@ -1835,6 +2000,16 @@ class WebChannel {
 
     this.connected = true;
     logger.info({ port: PORT }, 'Web chat channel listening');
+
+    // Heartbeat: send a named 'ping' event to every SSE client every 20 seconds.
+    // Prevents Android Chrome from throttling or freezing idle SSE connections.
+    setInterval(() => {
+      for (const clients of sseClients.values()) {
+        for (const client of clients) {
+          try { client.write('event: ping\ndata: \n\n'); } catch {}
+        }
+      }
+    }, 20000);
 
     // Ensure dedicated cron session exists (low timestamp so user renames always win)
     try {

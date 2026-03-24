@@ -146,6 +146,9 @@ npx @rozek/nanoclaw --port 8080
 # Custom workspace (directory NanoClaw works in)
 npx @rozek/nanoclaw --workspace ~/my-workspace
 
+# Set assistant name — persists across restarts (only needed once)
+npx @rozek/nanoclaw --name Nemo
+
 # Token protection — recommended when accessible from the LAN
 npx @rozek/nanoclaw --token mySecretToken
 
@@ -160,7 +163,7 @@ npx @rozek/nanoclaw --sandbox apple
 npx @rozek/nanoclaw --key sk-ant-...
 
 # Combine options
-npx @rozek/nanoclaw --port 8080 --workspace ~/my-workspace --token mySecretToken --sandbox docker
+npx @rozek/nanoclaw --name Nemo --port 8080 --workspace ~/my-workspace --token mySecretToken
 ```
 
 ### All CLI options
@@ -170,6 +173,8 @@ Options:
   --host <address>      Bind address for the web channel   (default: 127.0.0.1)
   --port <number>       Port for the web channel           (default: 3099)
   --workspace <path>    Workspace directory                (default: current directory)
+  --name <name>         Assistant name in CLAUDE.md        (default: Andy)
+                          Persists across restarts — only needs to be set once.
   --key <api-key>       Anthropic API key
                           Not required with Claude Pro/Max — NanoClaw uses
                           Claude Code, which is included in those plans.
@@ -190,6 +195,7 @@ CLI flags take precedence. Alternatively, set environment variables:
 ```bash
 NANOCLAW_HOST=127.0.0.1
 NANOCLAW_PORT=3099
+NANOCLAW_NAME=Nemo
 NANOCLAW_TOKEN=mySecretToken
 NANOCLAW_KEY=sk-ant-...
 NANOCLAW_WORKSPACE=/path/to/workspace
