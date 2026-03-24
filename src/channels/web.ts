@@ -1677,7 +1677,11 @@ class WebChannel {
             if (id && typeof id === 'string') {
               deleteMessage(id);
               if (sid && typeof sid === 'string') {
-                broadcastToSession(sid, 'delete_message', JSON.stringify({ id }));
+                broadcastToSession(
+                  sid,
+                  'delete_message',
+                  JSON.stringify({ id }),
+                );
               }
             }
             res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -1849,7 +1853,11 @@ class WebChannel {
                 storeMessage(msg); // persist to DB for cross-browser history
                 storeChatMetadata(jid, msg.timestamp); // keep chats.last_message_time current for unread detection
                 // Broadcast to all SSE clients so other devices show the message immediately
-                broadcastToSession(sessionId, 'user_message', JSON.stringify({ text: content.trim(), id: msgId }));
+                broadcastToSession(
+                  sessionId,
+                  'user_message',
+                  JSON.stringify({ text: content.trim(), id: msgId }),
+                );
               } catch {}
               this.onMessage(jid, msg);
             }
@@ -1950,7 +1958,11 @@ class WebChannel {
           theme_color: '#2563eb',
           icons: [
             { src: '/favicon.png', sizes: '192x192', type: 'image/png' },
-            { src: '/apple-touch-icon.png', sizes: '180x180', type: 'image/png' },
+            {
+              src: '/apple-touch-icon.png',
+              sizes: '180x180',
+              type: 'image/png',
+            },
           ],
         };
         res.writeHead(200, {
@@ -2006,7 +2018,9 @@ class WebChannel {
     setInterval(() => {
       for (const clients of sseClients.values()) {
         for (const client of clients) {
-          try { client.write('event: ping\ndata: \n\n'); } catch {}
+          try {
+            client.write('event: ping\ndata: \n\n');
+          } catch {}
         }
       }
     }, 20000);
