@@ -294,7 +294,7 @@ const HTML = `<!DOCTYPE html>
     .msg-row.user .del-btn { order: -1; }
     .del-btn { flex-shrink: 0; background: none; border: none; cursor: pointer; color: #ccc; padding: 2px 3px; line-height: 1; border-radius: 4px; transition: color 0.15s; margin-top: 7px; }
     .del-btn:hover { color: #ef4444; }
-    .msg { max-width: 75%; padding: 10px 14px; border-radius: 12px; line-height: 1.6; word-break: break-word; font-size: 15px; }
+    .msg { max-width: 75%; padding: 10px 14px; border-radius: 12px; line-height: 1.6; word-break: break-word; font-size: 15px; position: relative; }
     .msg.user { background: #2563eb; color: #fff; border-bottom-right-radius: 4px; white-space: pre-wrap; }
     .msg.bot { background: #ffffff; border: 1px solid #e0e0e0; border-bottom-left-radius: 4px; position: relative; }
     .msg.typing { color: #888; font-style: italic; }
@@ -309,6 +309,9 @@ const HTML = `<!DOCTYPE html>
     .copy-btn { position: absolute; top: 6px; right: 6px; background: none; border: none; border-radius: 4px; padding: 2px 4px; cursor: pointer; color: #bbb; transition: color 0.15s; line-height: 1; }
     .copy-btn:hover { color: #555; }
     .copy-btn.copied { color: #16a34a; }
+    .msg.user .copy-btn { color: rgba(255,255,255,0.4); }
+    .msg.user .copy-btn:hover { color: rgba(255,255,255,0.95); }
+    .msg.user .copy-btn.copied { color: rgba(255,255,255,0.95); }
     .msg.bot code { background: #f0f2f4; padding: 2px 5px; border-radius: 4px; font-size: 0.88em; font-family: monospace; }
     .msg.bot pre code { background: none; padding: 0; font-size: 0.88em; }
     .msg.bot blockquote { border-left: 3px solid #d0d0d0; padding-left: 12px; color: #666; margin: 0.5em 0; }
@@ -663,6 +666,14 @@ const HTML = `<!DOCTYPE html>
         d.appendChild(copyBtn);
       } else {
         d.textContent = text;
+        const copyBtn = document.createElement('button');
+        copyBtn.className = 'copy-btn';
+        copyBtn.innerHTML = ICON_COPY;
+        copyBtn.title = 'Nachricht kopieren';
+        copyBtn.addEventListener('click', () => {
+          navigator.clipboard.writeText(text).then(() => flashCopied(copyBtn)).catch(() => {});
+        });
+        d.appendChild(copyBtn);
       }
       // Trash button — inside the bubble, top corner, always visible; only for real messages with a DB id
       row.appendChild(d);
