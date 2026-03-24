@@ -1,6 +1,6 @@
 {
   "name": "@rozek/nanoclaw",
-  "version": "0.0.21",
+  "version": "0.0.22",
   "description": "Personal Claude assistant. Lightweight, secure, customizable.",
   "type": "module",
   "main": "dist/index.js",
