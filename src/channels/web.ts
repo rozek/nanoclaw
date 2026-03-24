@@ -210,7 +210,9 @@ function broadcastAll(event: string, data: string): void {
   const payload = `event: ${event}\ndata: ${data}\n\n`;
   for (const clients of sseClients.values()) {
     for (const client of clients) {
-      try { client.write(payload); } catch {}
+      try {
+        client.write(payload);
+      } catch {}
     }
   }
 }
@@ -1648,7 +1650,10 @@ class WebChannel {
                     ? nameUpdatedAt
                     : Date.now();
                 updateChatName(WEB_JID_PREFIX + sid, safeName, ts);
-                broadcastAll('sessions_changed', JSON.stringify({ renamed: sid }));
+                broadcastAll(
+                  'sessions_changed',
+                  JSON.stringify({ renamed: sid }),
+                );
               }
             }
             res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -1668,7 +1673,10 @@ class WebChannel {
             const { sid } = JSON.parse(body);
             if (sid && typeof sid === 'string') {
               // Notify all clients before removing their SSE connections
-              broadcastAll('sessions_changed', JSON.stringify({ deleted: sid }));
+              broadcastAll(
+                'sessions_changed',
+                JSON.stringify({ deleted: sid }),
+              );
               deleteChat(WEB_JID_PREFIX + sid);
               registeredSessions.delete(sid);
               sseClients.delete(sid);
