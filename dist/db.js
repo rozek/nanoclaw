@@ -81,6 +81,13 @@ function createSchema(database) {
     catch {
         /* column already exists */
     }
+    // Add script column if it doesn't exist (migration for existing DBs)
+    try {
+        database.exec(`ALTER TABLE scheduled_tasks ADD COLUMN script TEXT`);
+    }
+    catch {
+        /* column already exists */
+    }
     // Add is_bot_message column if it doesn't exist (migration for existing DBs)
     try {
         database.exec(`ALTER TABLE messages ADD COLUMN is_bot_message INTEGER DEFAULT 0`);
@@ -344,9 +351,9 @@ export function deleteMessage(id) {
 }
 export function createTask(task) {
     db.prepare(`
-    INSERT INTO scheduled_tasks (id, group_folder, chat_jid, prompt, schedule_type, schedule_value, context_mode, next_run, status, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(task.id, task.group_folder, task.chat_jid, task.prompt, task.schedule_type, task.schedule_value, task.context_mode || 'isolated', task.next_run, task.status, task.created_at);
+    INSERT INTO scheduled_tasks (id, group_folder, chat_jid, prompt, script, schedule_type, schedule_value, context_mode, next_run, status, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(task.id, task.group_folder, task.chat_jid, task.prompt, task.script || null, task.schedule_type, task.schedule_value, task.context_mode || 'isolated', task.next_run, task.status, task.created_at);
 }
 export function getTaskById(id) {
     return db.prepare('SELECT * FROM scheduled_tasks WHERE id = ?').get(id);
@@ -367,6 +374,10 @@ export function updateTask(id, updates) {
     if (updates.prompt !== undefined) {
         fields.push('prompt = ?');
         values.push(updates.prompt);
+    }
+    if (updates.script !== undefined) {
+        fields.push('script = ?');
+        values.push(updates.script || null);
     }
     if (updates.schedule_type !== undefined) {
         fields.push('schedule_type = ?');

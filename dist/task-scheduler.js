@@ -102,6 +102,7 @@ async function runTask(task, deps) {
         id: t.id,
         groupFolder: t.group_folder,
         prompt: t.prompt,
+        script: t.script,
         schedule_type: t.schedule_type,
         schedule_value: t.schedule_value,
         status: t.status,
@@ -153,6 +154,7 @@ async function runTask(task, deps) {
             isMain,
             isScheduledTask: true,
             assistantName: ASSISTANT_NAME,
+            script: task.script || undefined,
         }, (proc, containerName) => deps.onProcess(taskQueueJid, proc, containerName, group.folder), async (streamedOutput) => {
             if (streamedOutput.result) {
                 result = streamedOutput.result;

@@ -17,6 +17,7 @@ export declare function processTaskIpc(data: {
     schedule_type?: string;
     schedule_value?: string;
     context_mode?: string;
+    script?: string;
     groupFolder?: string;
     chatJid?: string;
     targetJid?: string;

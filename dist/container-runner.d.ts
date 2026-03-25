@@ -12,6 +12,7 @@ export interface ContainerInput {
     isMain: boolean;
     isScheduledTask?: boolean;
     assistantName?: string;
+    script?: string;
 }
 export interface ContainerOutput {
     status: 'success' | 'error';
@@ -24,6 +25,7 @@ export declare function writeTasksSnapshot(groupFolder: string, isMain: boolean,
     id: string;
     groupFolder: string;
     prompt: string;
+    script?: string | null;
     schedule_type: string;
     schedule_value: string;
     status: string;

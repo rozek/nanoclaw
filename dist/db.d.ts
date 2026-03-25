@@ -97,7 +97,7 @@ export declare function createTask(task: Omit<ScheduledTask, 'last_run' | 'last_
 export declare function getTaskById(id: string): ScheduledTask | undefined;
 export declare function getTasksForGroup(groupFolder: string): ScheduledTask[];
 export declare function getAllTasks(): ScheduledTask[];
-export declare function updateTask(id: string, updates: Partial<Pick<ScheduledTask, 'prompt' | 'schedule_type' | 'schedule_value' | 'next_run' | 'status'>>): void;
+export declare function updateTask(id: string, updates: Partial<Pick<ScheduledTask, 'prompt' | 'script' | 'schedule_type' | 'schedule_value' | 'next_run' | 'status'>>): void;
 export declare function deleteTask(id: string): void;
 export declare function getDueTasks(): ScheduledTask[];
 export declare function updateTaskAfterRun(id: string, nextRun: string | null, lastResult: string): void;

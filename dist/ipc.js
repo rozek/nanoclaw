@@ -170,6 +170,7 @@ deps) {
                     group_folder: targetFolder,
                     chat_jid: targetJid,
                     prompt: data.prompt,
+                    script: data.script || null,
                     schedule_type: scheduleType,
                     schedule_value: data.schedule_value,
                     context_mode: contextMode,
@@ -234,6 +235,8 @@ deps) {
                 const updates = {};
                 if (data.prompt !== undefined)
                     updates.prompt = data.prompt;
+                if (data.script !== undefined)
+                    updates.script = data.script || null;
                 if (data.schedule_type !== undefined)
                     updates.schedule_type = data.schedule_type;
                 if (data.schedule_value !== undefined)
