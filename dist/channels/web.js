@@ -86,7 +86,10 @@ function authorizeRequest(req, res) {
     if (raw !== undefined) {
         try {
             if (decodeURIComponent(raw) === TOKEN) {
-                res.setHeader('Set-Cookie', `nanoclaw_token=${TOKEN}; HttpOnly; SameSite=Strict; Path=/`);
+                // Add Secure flag when served over HTTPS (direct TLS or behind a reverse proxy).
+                const isHttps = req.socket?.encrypted ||
+                    req.headers['x-forwarded-proto'] === 'https';
+                res.setHeader('Set-Cookie', `nanoclaw_token=${TOKEN}; HttpOnly; SameSite=Strict; Path=/${isHttps ? '; Secure' : ''}`);
                 return true;
             }
         }
@@ -182,7 +185,9 @@ function broadcastAll(event, data) {
             try {
                 client.write(payload);
             }
-            catch { }
+            catch {
+                clients.delete(client);
+            }
         }
     }
 }
@@ -193,8 +198,20 @@ function sessionIdFromJid(jid) {
 }
 function sidFromUrl(url) {
     const raw = url?.match(/[?&]sid=([^&]+)/)?.[1] ?? 'default';
+    let decoded = 'default';
+    try {
+        decoded = decodeURIComponent(raw);
+    }
+    catch {
+        decoded = raw;
+    }
     // Sanitize: only alphanumeric, hyphens and underscores, max 64 chars
-    return raw.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64) || 'default';
+    return decoded.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64) || 'default';
+}
+/** Sanitize a session ID from a request body (same rules as sidFromUrl). */
+function sanitizeSid(raw) {
+    const s = typeof raw === 'string' ? raw : 'default';
+    return s.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64) || 'default';
 }
 function getLocalIp() {
     for (const ifaces of Object.values(os.networkInterfaces())) {
@@ -885,7 +902,6 @@ const HTML = `<!DOCTYPE html>
         // This ensures cross-device/cross-browser order sync.
         if (serverOrder.length > 0) {
           const orderMap = new Map(serverOrder.map((id, i) => [id, i]));
-          const maxOrder = serverOrder.length;
           const prevOrder = local.map(s => s.id).join(',');
           local.sort((a, b) => {
             const rawIa = orderMap.get(a.id);
@@ -1289,18 +1305,9 @@ const HTML = `<!DOCTYPE html>
     mergeServerSessions(); // populate sidebar with sessions known to the server
 
     // ── Cross-window sync ─────────────────────────────────────────────────
-    let lastSessionsJson = localStorage.getItem('sessions');
-    function checkAndSyncSessions() {
-      const current = localStorage.getItem('sessions');
-      if (current !== lastSessionsJson) {
-        lastSessionsJson = current;
-        if (!isRenaming()) renderSessions();
-      }
-    }
-    // Primary: storage event (fires immediately when another tab in the same browser changes localStorage)
+    // storage event fires immediately when another tab in the same browser changes localStorage
     window.addEventListener('storage', e => {
       if (e.key === 'sessions' || e.key === null) {
-        lastSessionsJson = localStorage.getItem('sessions');
         if (!isRenaming()) renderSessions();
       }
     });
@@ -1335,11 +1342,24 @@ const HTML = `<!DOCTYPE html>
       if (text === '/clear') {
         msgsEl.innerHTML = '';
         typingEl = null;
+        statusEl = null;
         deleteHistory(sessionId);
         fetch('/clear-history', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ sid: sessionId }),
+        }).catch(() => {});
+        inputEl.focus();
+        return;
+      }
+
+      // /cwd and /pwd are server-side commands that don't produce a chat message in the DB.
+      // Handle them without calling addMsg so the input doesn't flicker into chat then vanish.
+      if (/^\\/cwd(\\s|$)/i.test(text) || /^\\/pwd\\s*$/i.test(text)) {
+        fetch('/message', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content: text, sessionId }),
         }).catch(() => {});
         inputEl.focus();
         return;
@@ -1409,6 +1429,7 @@ class WebChannel {
     name = 'web';
     server = null;
     connected = false;
+    pingInterval = null;
     onMessage;
     onChatMetadata;
     registerGroup;
@@ -1571,8 +1592,8 @@ class WebChannel {
                             !order.every((id) => typeof id === 'string')) {
                             throw new Error('order must be an array of strings');
                         }
-                        // Store as full JIDs internally
-                        setWebSessionOrder(order.map((id) => WEB_JID_PREFIX + id));
+                        // Store as full JIDs internally (sanitize each ID first)
+                        setWebSessionOrder(order.map((id) => WEB_JID_PREFIX + sanitizeSid(id)));
                         res.writeHead(200, { 'Content-Type': 'application/json' });
                         res.end('{"ok":true}');
                     }
@@ -1587,7 +1608,8 @@ class WebChannel {
             if (req.method === 'POST' && req.url === '/session-name') {
                 collectBody(req, res, (body) => {
                     try {
-                        const { sid, name, nameUpdatedAt } = JSON.parse(body);
+                        const { sid: rawSid, name, nameUpdatedAt } = JSON.parse(body);
+                        const sid = typeof rawSid === 'string' ? sanitizeSid(rawSid) : null;
                         if (sid && name && typeof name === 'string') {
                             const safeName = sanitizeSessionName(name);
                             if (safeName) {
@@ -1613,8 +1635,9 @@ class WebChannel {
             if (req.method === 'POST' && req.url === '/delete-session') {
                 collectBody(req, res, (body) => {
                     try {
-                        const { sid } = JSON.parse(body);
-                        if (sid && typeof sid === 'string') {
+                        const { sid: rawSid } = JSON.parse(body);
+                        const sid = typeof rawSid === 'string' ? sanitizeSid(rawSid) : null;
+                        if (sid) {
                             // Notify all clients before removing their SSE connections
                             broadcastAll('sessions_changed', JSON.stringify({ deleted: sid }));
                             deleteChat(WEB_JID_PREFIX + sid);
@@ -1654,11 +1677,17 @@ class WebChannel {
             if (req.method === 'POST' && req.url === '/delete-message') {
                 collectBody(req, res, (body) => {
                     try {
-                        const { id, sid } = JSON.parse(body);
+                        const { id, sid: rawSid } = JSON.parse(body);
+                        const sid = typeof rawSid === 'string' ? sanitizeSid(rawSid) : null;
                         if (id && typeof id === 'string') {
                             deleteMessage(id);
-                            if (sid && typeof sid === 'string') {
-                                broadcastToSession(sid, 'delete_message', JSON.stringify({ id }));
+                            const payload = JSON.stringify({ id });
+                            // Prefer session-scoped broadcast; fall back to broadcastAll if sid is missing
+                            if (sid) {
+                                broadcastToSession(sid, 'delete_message', payload);
+                            }
+                            else {
+                                broadcastAll('delete_message', payload);
                             }
                         }
                         res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -1675,8 +1704,9 @@ class WebChannel {
             if (req.method === 'POST' && req.url === '/clear-history') {
                 collectBody(req, res, (body) => {
                     try {
-                        const { sid } = JSON.parse(body);
-                        if (sid && typeof sid === 'string') {
+                        const { sid: rawSid } = JSON.parse(body);
+                        const sid = typeof rawSid === 'string' ? sanitizeSid(rawSid) : null;
+                        if (sid) {
                             clearChatMessages(WEB_JID_PREFIX + sid);
                         }
                         res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -1747,16 +1777,16 @@ class WebChannel {
             if (req.method === 'POST' && req.url === '/message') {
                 collectBody(req, res, (body) => {
                     try {
-                        const { content, sessionId = 'default', id: clientMsgId, } = JSON.parse(body);
+                        const { content, sessionId: rawSid = 'default', id: clientMsgId, } = JSON.parse(body);
+                        const sessionId = sanitizeSid(rawSid);
                         if (content && typeof content === 'string') {
                             this.ensureSession(sessionId);
                             const jid = WEB_JID_PREFIX + sessionId;
                             // /cwd <path> shorthand: same effect as "switching to folder: <path>"
                             const cwdCmdMatch = content.match(/^\/cwd(?:\s+(.*))?$/i);
                             if (cwdCmdMatch) {
-                                const cwd = (cwdCmdMatch[1] || '').trim();
-                                setCwd(sessionId, cwd);
-                                broadcastToSession(sessionId, 'cwd', JSON.stringify(cwd));
+                                setCwd(sessionId, (cwdCmdMatch[1] || '').trim());
+                                broadcastToSession(sessionId, 'cwd', JSON.stringify(sessionCwds.get(sessionId) ?? ''));
                                 res.writeHead(200, { 'Content-Type': 'application/json' });
                                 res.end('{"ok":true}');
                                 return;
@@ -1781,18 +1811,17 @@ class WebChannel {
                                 };
                                 try {
                                     storeMessage(botMsg);
+                                    broadcastToSession(sessionId, 'message', JSON.stringify({ text: reply, id: botMsgId }));
                                 }
                                 catch { }
-                                broadcastToSession(sessionId, 'message', JSON.stringify({ text: reply, id: botMsgId }));
                                 res.writeHead(200, { 'Content-Type': 'application/json' });
                                 res.end('{"ok":true}');
                                 return;
                             }
                             const cwdMatch = content.match(/^switching to folder:\s*(.+)$/i);
                             if (cwdMatch) {
-                                const cwd = cwdMatch[1].trim();
-                                setCwd(sessionId, cwd);
-                                broadcastToSession(sessionId, 'cwd', JSON.stringify(cwd));
+                                setCwd(sessionId, cwdMatch[1].trim());
+                                broadcastToSession(sessionId, 'cwd', JSON.stringify(sessionCwds.get(sessionId) ?? ''));
                             }
                             // Use client-provided ID if valid (allows delete button to work immediately),
                             // otherwise generate one server-side.
@@ -1832,7 +1861,8 @@ class WebChannel {
             if (req.method === 'POST' && req.url === '/cwd') {
                 collectBody(req, res, (body) => {
                     try {
-                        const { cwd, sessionId = 'default' } = JSON.parse(body);
+                        const { cwd, sessionId: rawSid = 'default' } = JSON.parse(body);
+                        const sessionId = sanitizeSid(rawSid);
                         if (typeof cwd === 'string') {
                             // Validate that the resolved path stays within the workspace
                             const workspace = process.cwd();
@@ -1843,9 +1873,8 @@ class WebChannel {
                                 res.end('{"error":"CWD outside workspace"}');
                                 return;
                             }
-                            const safeCwd = path.relative(workspace, resolved);
-                            setCwd(sessionId, safeCwd);
-                            broadcastToSession(sessionId, 'cwd', JSON.stringify(safeCwd));
+                            setCwd(sessionId, path.relative(workspace, resolved));
+                            broadcastToSession(sessionId, 'cwd', JSON.stringify(sessionCwds.get(sessionId) ?? ''));
                         }
                         res.writeHead(200, { 'Content-Type': 'application/json' });
                         res.end('{"ok":true}');
@@ -1868,7 +1897,8 @@ class WebChannel {
                 // File data is Base64-encoded (~33 % overhead → ~7.5 MB effective file size).
                 collectBody(req, res, (body) => {
                     try {
-                        const { filename, data, sessionId = 'default', } = JSON.parse(body);
+                        const { filename, data, sessionId: rawSid = 'default', } = JSON.parse(body);
+                        const sessionId = sanitizeSid(rawSid);
                         if (!filename || !data)
                             throw new Error('Missing fields');
                         const safeName = path.basename(filename);
@@ -1953,16 +1983,21 @@ class WebChannel {
         logger.info({ port: PORT }, 'Web chat channel listening');
         // Heartbeat: send a named 'ping' event to every SSE client every 20 seconds.
         // Prevents Android Chrome from throttling or freezing idle SSE connections.
-        setInterval(() => {
-            for (const clients of sseClients.values()) {
-                for (const client of clients) {
-                    try {
-                        client.write('event: ping\ndata: \n\n');
+        // Guard against multiple intervals if connect() is called more than once.
+        if (!this.pingInterval) {
+            this.pingInterval = setInterval(() => {
+                for (const clients of sseClients.values()) {
+                    for (const client of clients) {
+                        try {
+                            client.write('event: ping\ndata: \n\n');
+                        }
+                        catch {
+                            clients.delete(client);
+                        }
                     }
-                    catch { }
                 }
-            }
-        }, 20000);
+            }, 20000);
+        }
         // Pre-load CWDs from DB so /upload and /pwd work correctly before first SSE connect
         try {
             for (const c of getAllChats()) {
@@ -1971,7 +2006,9 @@ class WebChannel {
                 }
             }
         }
-        catch { }
+        catch (err) {
+            logger.warn({ err }, 'Failed to pre-load session CWDs from DB');
+        }
         // Ensure dedicated cron session exists (low timestamp so user renames always win)
         try {
             updateChatName(WEB_JID_PREFIX + CRON_SESSION_ID, CRON_SESSION_NAME, 1);
@@ -1990,9 +2027,8 @@ class WebChannel {
         const sessionId = sessionIdFromJid(jid);
         const topicMatch = text.match(/^switching to folder:\s*(.+)$/im);
         if (topicMatch) {
-            const cwd = topicMatch[1].trim();
-            setCwd(sessionId, cwd);
-            broadcastToSession(sessionId, 'cwd', JSON.stringify(cwd));
+            setCwd(sessionId, topicMatch[1].trim());
+            broadcastToSession(sessionId, 'cwd', JSON.stringify(sessionCwds.get(sessionId) ?? ''));
         }
         // Persist bot response to DB so history works across browsers/windows
         const botTs = new Date().toISOString();
@@ -2048,6 +2084,10 @@ class WebChannel {
     }
     async disconnect() {
         this.connected = false;
+        if (this.pingInterval) {
+            clearInterval(this.pingInterval);
+            this.pingInterval = null;
+        }
         for (const clients of sseClients.values()) {
             for (const client of clients)
                 client.end();
