@@ -1,11 +1,11 @@
 import fs from 'fs';
 import path from 'path';
-import { OneCLI } from '@onecli-sh/sdk';
-import { ASSISTANT_NAME, DATA_DIR, GROUPS_DIR, IDLE_TIMEOUT, ONECLI_URL, POLL_INTERVAL, STORE_DIR, TIMEZONE, TRIGGER_PATTERN, } from './config.js';
+import { ASSISTANT_NAME, CREDENTIAL_PROXY_PORT, DATA_DIR, GROUPS_DIR, IDLE_TIMEOUT, POLL_INTERVAL, STORE_DIR, TIMEZONE, TRIGGER_PATTERN, } from './config.js';
 import './channels/index.js';
 import { getChannelFactory, getRegisteredChannelNames, } from './channels/registry.js';
 import { runContainerAgent, writeGroupsSnapshot, writeTasksSnapshot, } from './container-runner.js';
-import { cleanupOrphans, ensureContainerRuntimeRunning, } from './container-runtime.js';
+import { startCredentialProxy } from './credential-proxy.js';
+import { cleanupOrphans, ensureContainerRuntimeRunning, PROXY_BIND_HOST, } from './container-runtime.js';
 import { getAllChats, getAllRegisteredGroups, getAllSessions, getAllTasks, getMessagesSince, getNewMessages, getRouterState, initDatabase, setRegisteredGroup, setRouterState, setSession, storeChatMetadata, storeMessage, } from './db.js';
 import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
@@ -25,17 +25,6 @@ let lastAgentTimestamp = {};
 let messageLoopRunning = false;
 const channels = [];
 const queue = new GroupQueue();
-const onecli = new OneCLI({ url: ONECLI_URL });
-function ensureOneCLIAgent(jid, group) {
-    if (group.isMain)
-        return;
-    const identifier = group.folder.toLowerCase().replace(/_/g, '-');
-    onecli.ensureAgent({ name: group.name, identifier }).then((res) => {
-        logger.info({ jid, identifier, created: res.created }, 'OneCLI agent ensured');
-    }, (err) => {
-        logger.debug({ jid, identifier, err: String(err) }, 'OneCLI agent ensure skipped');
-    });
-}
 function loadState() {
     lastTimestamp = getRouterState('last_timestamp') || '';
     const agentTs = getRouterState('last_agent_timestamp');
@@ -67,8 +56,6 @@ function registerGroup(jid, group) {
     setRegisteredGroup(jid, group);
     // Create group folder
     fs.mkdirSync(path.join(groupDir, 'logs'), { recursive: true });
-    // Ensure a corresponding OneCLI agent exists (best-effort, non-blocking)
-    ensureOneCLIAgent(jid, group);
     logger.info({ jid, name: group.name, folder: group.folder }, 'Group registered');
 }
 /**
@@ -552,11 +539,8 @@ export async function main() {
     initDatabase();
     logger.info('Database initialized');
     loadState();
-    // Ensure OneCLI agents exist for all registered groups.
-    // Recovers from missed creates (e.g. OneCLI was down at registration time).
-    for (const [jid, group] of Object.entries(registeredGroups)) {
-        ensureOneCLIAgent(jid, group);
-    }
+    // Start credential proxy (containers route API calls through this)
+    const proxyServer = await startCredentialProxy(CREDENTIAL_PROXY_PORT, PROXY_BIND_HOST);
     restoreRemoteControl();
     // Graceful shutdown handlers
     const shutdown = async (signal) => {
@@ -564,6 +548,7 @@ export async function main() {
         await queue.shutdown(10000);
         for (const ch of channels)
             await ch.disconnect();
+        proxyServer.close();
         process.exit(0);
     };
     process.on('SIGTERM', () => shutdown('SIGTERM'));
