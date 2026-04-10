@@ -13,8 +13,8 @@ export declare const PROXY_BIND_HOST: string;
 export declare function hostGatewayArgs(): string[];
 /** Returns CLI args for a readonly bind mount. */
 export declare function readonlyMountArgs(hostPath: string, containerPath: string): string[];
-/** Returns the shell command to stop a container by name. */
-export declare function stopContainer(name: string): string;
+/** Stop a container by name. Uses execFileSync to avoid shell injection. */
+export declare function stopContainer(name: string): void;
 /** Ensure the container runtime is running, starting it if needed. */
 export declare function ensureContainerRuntimeRunning(): void;
 /** Kill orphaned NanoClaw containers from previous runs. */

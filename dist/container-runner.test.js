@@ -49,6 +49,23 @@ vi.mock('./mount-security.js', () => ({
 vi.mock('./credential-proxy.js', () => ({
     detectAuthMode: vi.fn(() => 'api-key'),
 }));
+// Mock container-runtime
+vi.mock('./container-runtime.js', () => ({
+    CONTAINER_RUNTIME_BIN: 'docker',
+    hostGatewayArgs: () => [],
+    readonlyMountArgs: (h, c) => ['-v', `${h}:${c}:ro`],
+    stopContainer: vi.fn(),
+}));
+// Mock OneCLI SDK
+vi.mock('@onecli-sh/sdk', () => ({
+    OneCLI: class {
+        applyContainerConfig = vi.fn().mockResolvedValue(true);
+        createAgent = vi.fn().mockResolvedValue({ id: 'test' });
+        ensureAgent = vi
+            .fn()
+            .mockResolvedValue({ name: 'test', identifier: 'test', created: true });
+    },
+}));
 // Create a controllable fake ChildProcess
 function createFakeProcess() {
     const proc = new EventEmitter();

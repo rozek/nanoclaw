@@ -6,6 +6,7 @@ import {
   CREDENTIAL_PROXY_PORT,
   DATA_DIR,
   DEFAULT_TRIGGER,
+  TRIGGER_PATTERN,
   getTriggerPattern,
   GROUPS_DIR,
   IDLE_TIMEOUT,
@@ -90,7 +91,7 @@ function loadState(): void {
   const agentTs = getRouterState('last_agent_timestamp');
   try {
     lastAgentTimestamp = agentTs ? JSON.parse(agentTs) : {};
-  } catch {
+  } catch (_) {
     logger.warn('Corrupted last_agent_timestamp in DB, resetting');
     lastAgentTimestamp = {};
   }

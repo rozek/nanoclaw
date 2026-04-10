@@ -2,7 +2,7 @@
  * Container Runner for NanoClaw
  * Spawns agent execution in containers and handles IPC
  */
-import { exec, spawn } from 'child_process';
+import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { CONTAINER_IMAGE, CONTAINER_MAX_OUTPUT_SIZE, CONTAINER_TIMEOUT, CREDENTIAL_PROXY_PORT, DATA_DIR, GROUPS_DIR, IDLE_TIMEOUT, TIMEZONE, } from './config.js';
@@ -23,7 +23,7 @@ function buildVolumeMounts(group, isMain) {
     const groupDir = resolveGroupFolderPath(group.folder);
     if (isMain) {
         // Main gets the project root read-only. Writable paths the agent needs
-        // (group folder, IPC, .claude/) are mounted separately below.
+        // (store, group folder, IPC, .claude/) are mounted separately below.
         // Read-only prevents the agent from modifying host application code
         // (src/, dist/, package.json, etc.) which would bypass the sandbox
         // entirely on next restart.
@@ -42,12 +42,29 @@ function buildVolumeMounts(group, isMain) {
                 readonly: true,
             });
         }
+        // Main gets writable access to the store (SQLite DB) so it can
+        // query and write to the database directly.
+        const storeDir = path.join(projectRoot, 'store');
+        mounts.push({
+            hostPath: storeDir,
+            containerPath: '/workspace/project/store',
+            readonly: false,
+        });
         // Main also gets its group folder as the working directory
         mounts.push({
             hostPath: groupDir,
             containerPath: '/workspace/group',
             readonly: false,
         });
+        // Global memory directory — writable for main so it can update shared context
+        const globalDir = path.join(GROUPS_DIR, 'global');
+        if (fs.existsSync(globalDir)) {
+            mounts.push({
+                hostPath: globalDir,
+                containerPath: '/workspace/global',
+                readonly: false,
+            });
+        }
     }
     else {
         // Other groups only get their own folder
@@ -326,12 +343,13 @@ export async function runContainerAgent(group, input, onProcess, onOutput, onSta
         const killOnTimeout = () => {
             timedOut = true;
             logger.error({ group: group.name, containerName }, 'Container timeout, stopping gracefully');
-            exec(stopContainer(containerName), { timeout: 15000 }, (err) => {
-                if (err) {
-                    logger.warn({ group: group.name, containerName, err }, 'Graceful stop failed, force killing');
-                    container.kill('SIGKILL');
-                }
-            });
+            try {
+                stopContainer(containerName);
+            }
+            catch (err) {
+                logger.warn({ group: group.name, containerName, err }, 'Graceful stop failed, force killing');
+                container.kill('SIGKILL');
+            }
         };
         let timeout = setTimeout(killOnTimeout, timeoutMs);
         // Reset the timeout whenever there's activity (streaming output)

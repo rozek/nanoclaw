@@ -390,7 +390,10 @@ const HTML = `<!DOCTYPE html>
     // ── Markdown renderer ──────────────────────────────────────────────────
     const renderer = {
       code(code, lang) {
-        if (lang === 'mermaid') return '<pre class="mermaid">' + code + '</pre>';
+        if (lang === 'mermaid') {
+          const safe = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+          return '<pre class="mermaid">' + safe + '</pre>';
+        }
         const language = (lang && hljs.getLanguage(lang)) ? lang : 'plaintext';
         return '<pre><code class="hljs language-' + language + '">' +
           hljs.highlight(code, { language }).value + '</code></pre>';

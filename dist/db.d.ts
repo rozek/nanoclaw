@@ -2,6 +2,8 @@ import { NewMessage, RegisteredGroup, ScheduledTask, TaskRunLog } from './types.
 export declare function initDatabase(): void;
 /** @internal - for tests only. Creates a fresh in-memory database. */
 export declare function _initTestDatabase(): void;
+/** @internal - for tests only. */
+export declare function _closeDatabase(): void;
 /**
  * Store chat metadata only (no message content).
  * Used for all chats to enable group discovery without storing sensitive content.
@@ -93,6 +95,7 @@ export declare function getMessagesSince(chatJid: string, sinceTimestamp: string
  * Used by the web channel when the user clicks the trash icon on a message.
  */
 export declare function deleteMessage(id: string): void;
+export declare function getLastBotMessageTimestamp(chatJid: string, botPrefix: string): string | undefined;
 export declare function createTask(task: Omit<ScheduledTask, 'last_run' | 'last_result'>): void;
 export declare function getTaskById(id: string): ScheduledTask | undefined;
 export declare function getTasksForGroup(groupFolder: string): ScheduledTask[];
@@ -106,6 +109,7 @@ export declare function getRouterState(key: string): string | undefined;
 export declare function setRouterState(key: string, value: string): void;
 export declare function getSession(groupFolder: string): string | undefined;
 export declare function setSession(groupFolder: string, sessionId: string): void;
+export declare function deleteSession(groupFolder: string): void;
 export declare function getAllSessions(): Record<string, string>;
 export declare function getRegisteredGroup(jid: string): (RegisteredGroup & {
     jid: string;

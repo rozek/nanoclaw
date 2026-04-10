@@ -130,7 +130,16 @@ function createSchema(database) {
         database.exec(`UPDATE chats SET channel = 'whatsapp', is_group = 1 WHERE jid LIKE '%@g.us'`);
         database.exec(`UPDATE chats SET channel = 'whatsapp', is_group = 0 WHERE jid LIKE '%@s.whatsapp.net'`);
         database.exec(`UPDATE chats SET channel = 'discord', is_group = 1 WHERE jid LIKE 'dc:%'`);
-        database.exec(`UPDATE chats SET channel = 'telegram', is_group = 1 WHERE jid LIKE 'tg:%'`);
+        database.exec(`UPDATE chats SET channel = 'telegram', is_group = 0 WHERE jid LIKE 'tg:%'`);
+    }
+    catch {
+        /* columns already exist */
+    }
+    // Add reply context columns if they don't exist (migration for existing DBs)
+    try {
+        database.exec(`ALTER TABLE messages ADD COLUMN reply_to_message_id TEXT`);
+        database.exec(`ALTER TABLE messages ADD COLUMN reply_to_message_content TEXT`);
+        database.exec(`ALTER TABLE messages ADD COLUMN reply_to_sender_name TEXT`);
     }
     catch {
         /* columns already exist */
@@ -148,6 +157,10 @@ export function initDatabase() {
 export function _initTestDatabase() {
     db = new Database(':memory:');
     createSchema(db);
+}
+/** @internal - for tests only. */
+export function _closeDatabase() {
+    db.close();
 }
 /**
  * Store chat metadata only (no message content).
@@ -287,7 +300,7 @@ export function setLastGroupSync() {
  * Only call this for registered groups where message history is needed.
  */
 export function storeMessage(msg) {
-    db.prepare(`INSERT OR REPLACE INTO messages (id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(msg.id, msg.chat_jid, msg.sender, msg.sender_name, msg.content, msg.timestamp, msg.is_from_me ? 1 : 0, msg.is_bot_message ? 1 : 0);
+    db.prepare(`INSERT OR REPLACE INTO messages (id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message, reply_to_message_id, reply_to_message_content, reply_to_sender_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(msg.id, msg.chat_jid, msg.sender, msg.sender_name, msg.content, msg.timestamp, msg.is_from_me ? 1 : 0, msg.is_bot_message ? 1 : 0, msg.reply_to_message_id ?? null, msg.reply_to_message_content ?? null, msg.reply_to_sender_name ?? null);
 }
 /**
  * Store a message directly.
@@ -304,7 +317,8 @@ export function getNewMessages(jids, lastTimestamp, botPrefix, limit = 200) {
     // Subquery takes the N most recent, outer query re-sorts chronologically.
     const sql = `
     SELECT * FROM (
-      SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me
+      SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me,
+             reply_to_message_id, reply_to_message_content, reply_to_sender_name
       FROM messages
       WHERE timestamp > ? AND chat_jid IN (${placeholders})
         AND is_bot_message = 0 AND content NOT LIKE ?
@@ -329,7 +343,8 @@ export function getMessagesSince(chatJid, sinceTimestamp, botPrefix, limit = 200
     // Subquery takes the N most recent, outer query re-sorts chronologically.
     const sql = `
     SELECT * FROM (
-      SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me
+      SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me,
+             reply_to_message_id, reply_to_message_content, reply_to_sender_name
       FROM messages
       WHERE chat_jid = ? AND timestamp > ?
         AND is_bot_message = 0 AND content NOT LIKE ?
@@ -348,6 +363,13 @@ export function getMessagesSince(chatJid, sinceTimestamp, botPrefix, limit = 200
  */
 export function deleteMessage(id) {
     db.prepare(`DELETE FROM messages WHERE id = ?`).run(id);
+}
+export function getLastBotMessageTimestamp(chatJid, botPrefix) {
+    const row = db
+        .prepare(`SELECT MAX(timestamp) as ts FROM messages
+       WHERE chat_jid = ? AND (is_bot_message = 1 OR content LIKE ?)`)
+        .get(chatJid, `${botPrefix}:%`);
+    return row?.ts ?? undefined;
 }
 export function createTask(task) {
     db.prepare(`
@@ -448,6 +470,9 @@ export function getSession(groupFolder) {
 }
 export function setSession(groupFolder, sessionId) {
     db.prepare('INSERT OR REPLACE INTO sessions (group_folder, session_id) VALUES (?, ?)').run(groupFolder, sessionId);
+}
+export function deleteSession(groupFolder) {
+    db.prepare('DELETE FROM sessions WHERE group_folder = ?').run(groupFolder);
 }
 export function getAllSessions() {
     const rows = db
